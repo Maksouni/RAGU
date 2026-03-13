@@ -1,0 +1,80 @@
+services:
+  knb:
+    image: arcadedata/arcadedb:26.2.2
+    container_name: knb
+    ports:
+      - "127.0.0.1:2480:2480"
+    environment:
+      - JAVA_OPTS=-Darcadedb.server.rootPassword=playwithdata -Darcadedb.server.defaultDatabases=tododb[root]
+      - arcade_data:/home/arcadedb/data
+    volumes:
+      - arcade_data:/home/arcadedb/data
+
+  vllm:
+    image: vllm/vllm-openai:v0.17.1
+    container_name: vllm
+    volumes:
+      - ./.models:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:8080:8000" 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: 
+      - "--model"
+      - "Qwen/Qwen2.5-3B-Instruct-AWQ"
+      - "--gpu-memory-utilization"
+      - "0.55"
+      - "--max-model-len"
+      - "4096"
+
+  vllm-embed:
+    image: vllm/vllm-openai:v0.17.1
+    container_name: vllm-embed
+    volumes:
+      - ./.models:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:8081:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: 
+      - "--model"
+      - "nomic-ai/nomic-embed-text-v1.5"
+      - "--trust-remote-code"
+      - "--gpu-memory-utilization"
+      - "0.12"
+      - "--max-model-len"
+      - "1024"
+  
+  grg:
+    build: ./lib/grg
+    container_name: grg
+    depends_on:
+      - knb
+    env_file:
+      - .env
+    environment:
+      # - API_KEY=${API_KEY}
+      - BASE_URL=http://vllm:8000/v1
+      - EMBEDDING_BASE_URL=http://vllm-embed:8000/v1
+      - LLM_MODEL_NAME=Qwen/Qwen2.5-3B-Instruct-AWQ
+      - EMBEDDER_MODEL_NAME=nomic-ai/nomic-embed-text-v1.5
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ragu_working_dir:/app/ragu_working_dir
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  arcade_data:
+  ragu_working_dir:
