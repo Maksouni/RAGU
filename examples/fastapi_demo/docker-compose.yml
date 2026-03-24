@@ -1,14 +1,11 @@
 services:
-  knb:
-    image: arcadedata/arcadedb:26.2.2
-    container_name: knb-demo
+  memgraph:
+    image: memgraph/memgraph:2.19.1
+    container_name: memgraph-demo
     ports:
-      - "127.0.0.1:2480:2480"
-    environment:
-      - JAVA_OPTS=-Darcadedb.server.rootPassword=playwithdata -Darcadedb.server.defaultDatabases=tododb[root]
-      - arcade_data:/home/arcadedb/data
+      - "127.0.0.1:7687:7687"
     volumes:
-      - arcade_data:/home/arcadedb/data
+      - memgraph_data:/var/lib/memgraph
 
   vllm:
     image: vllm/vllm-openai:v0.17.1
@@ -16,7 +13,7 @@ services:
     volumes:
       - ./.models:/root/.cache/huggingface
     ports:
-      - "127.0.0.1:8080:8000" 
+      - "127.0.0.1:8080:8000"
     deploy:
       resources:
         reservations:
@@ -24,7 +21,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: 
+    command:
       - "--model"
       - "Qwen/Qwen2.5-3B-Instruct-AWQ"
       - "--gpu-memory-utilization"
@@ -46,7 +43,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: 
+    command:
       - "--model"
       - "nomic-ai/nomic-embed-text-v1.5"
       - "--trust-remote-code"
@@ -54,20 +51,21 @@ services:
       - "0.12"
       - "--max-model-len"
       - "1024"
-  
+
   grg:
     build:
       context: ../..
       dockerfile: examples/fastapi_demo/Dockerfile
     container_name: grg-demo
     depends_on:
-      - knb
+      - memgraph
     environment:
       - API_KEY=text
       - BASE_URL=http://vllm-demo:8000/v1
       - EMBEDDING_BASE_URL=http://vllm-embed-demo:8000/v1
       - LLM_MODEL_NAME=Qwen/Qwen2.5-3B-Instruct-AWQ
       - EMBEDDER_MODEL_NAME=nomic-ai/nomic-embed-text-v1.5
+      - MEMGRAPH_URI=bolt://memgraph:7687
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -76,5 +74,5 @@ services:
       - "host.docker.internal:host-gateway"
 
 volumes:
-  arcade_data:
+  memgraph_data:
   ragu_working_dir:
