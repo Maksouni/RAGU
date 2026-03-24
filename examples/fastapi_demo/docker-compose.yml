@@ -56,14 +56,13 @@ services:
       - "1024"
   
   grg:
-    build: ./lib/grg
+    build:
+      context: ../..
+      dockerfile: examples/fastapi_demo/Dockerfile
     container_name: grg
     depends_on:
       - knb
-    env_file:
-      - .env
     environment:
-      # - API_KEY=${API_KEY}
       - BASE_URL=http://vllm:8000/v1
       - EMBEDDING_BASE_URL=http://vllm-embed:8000/v1
       - LLM_MODEL_NAME=Qwen/Qwen2.5-3B-Instruct-AWQ
