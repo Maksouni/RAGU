@@ -1,7 +1,7 @@
 services:
   knb:
     image: arcadedata/arcadedb:26.2.2
-    container_name: knb
+    container_name: knb-demo
     ports:
       - "127.0.0.1:2480:2480"
     environment:
@@ -12,7 +12,7 @@ services:
 
   vllm:
     image: vllm/vllm-openai:v0.17.1
-    container_name: vllm
+    container_name: vllm-demo
     volumes:
       - ./.models:/root/.cache/huggingface
     ports:
@@ -34,7 +34,7 @@ services:
 
   vllm-embed:
     image: vllm/vllm-openai:v0.17.1
-    container_name: vllm-embed
+    container_name: vllm-embed-demo
     volumes:
       - ./.models:/root/.cache/huggingface
     ports:
@@ -59,12 +59,13 @@ services:
     build:
       context: ../..
       dockerfile: examples/fastapi_demo/Dockerfile
-    container_name: grg
+    container_name: grg-demo
     depends_on:
       - knb
     environment:
-      - BASE_URL=http://vllm:8000/v1
-      - EMBEDDING_BASE_URL=http://vllm-embed:8000/v1
+      - API_KEY=text
+      - BASE_URL=http://vllm-demo:8000/v1
+      - EMBEDDING_BASE_URL=http://vllm-embed-demo:8000/v1
       - LLM_MODEL_NAME=Qwen/Qwen2.5-3B-Instruct-AWQ
       - EMBEDDER_MODEL_NAME=nomic-ai/nomic-embed-text-v1.5
     ports:
