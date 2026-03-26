@@ -58,13 +58,13 @@ def _entity_from_row(row: Dict[str, Any]) -> Entity:
     )
 
 
-def _relation_from_row(row: Dict[str, Any], subject_id: str, object_id: str) -> Relation:
+def _relation_from_row(row: Dict[str, Any]) -> Relation:
     return Relation(
         id=str(row.get("id", "")),
-        subject_id=str(subject_id),
-        object_id=str(object_id),
-        subject_name=row.get("subject_name", str(subject_id)),
-        object_name=row.get("object_name", str(object_id)),
+        subject_id=str(row.get("subject_id", "")),
+        object_id=str(row.get("object_id", "")),
+        subject_name=row.get("subject_name", ""),
+        object_name=row.get("object_name", ""),
         relation_type=row.get("relation_type", "UNKNOWN"),
         description=row.get("description", ""),
         relation_strength=float(row.get("relation_strength", 1.0)),
@@ -76,11 +76,11 @@ class ArcadeDBStorage(BaseGraphStorage):
     """ArcadeDB implementation of BaseGraphStorage for RAGU."""
 
     def __init__(
-        self,
-        url: str = "http://localhost:2480",
-        database: str = "tododb",
-        auth: Optional[tuple[str, str]] = ("root", "playwithdata"),
-        **kwargs: Any,
+            self,
+            url: str = "http://localhost:2480",
+            database: str = "tododb",
+            auth: Optional[tuple[str, str]] = ("root", "playwithdata"),
+            **kwargs: Any,
     ):
         self._base_url = str(kwargs.get("url", url)).rstrip("/")
         self._database = str(kwargs.get("database", database))
@@ -115,17 +115,18 @@ class ArcadeDBStorage(BaseGraphStorage):
         try:
             await self._command(f"CREATE VERTEX TYPE {VERTEX_TYPE} IF NOT EXISTS")
             await self._command(f"CREATE EDGE TYPE {EDGE_TYPE} IF NOT EXISTS")
-            
+
             v_props = ["id", "entity_name", "entity_type", "description", "source_chunk_id", "documents_id", "clusters"]
             for p in v_props:
                 await self._command(f"CREATE PROPERTY {VERTEX_TYPE}.{p} IF NOT EXISTS STRING")
-            
+
             await self._command(f"CREATE INDEX IF NOT EXISTS ON {VERTEX_TYPE} (id) UNIQUE")
 
-            e_str_props = ["id", "subject_name", "object_name", "relation_type", "description", "source_chunk_id"]
+            # Denormalizing subject_id and object_id onto the edge for robust querying
+            e_str_props = ["id", "subject_id", "object_id", "subject_name", "object_name", "relation_type", "description", "source_chunk_id"]
             for p in e_str_props:
                 await self._command(f"CREATE PROPERTY {EDGE_TYPE}.{p} IF NOT EXISTS STRING")
-            
+
             await self._command(f"CREATE PROPERTY {EDGE_TYPE}.relation_strength IF NOT EXISTS DOUBLE")
         except Exception:
             pass
@@ -142,8 +143,8 @@ class ArcadeDBStorage(BaseGraphStorage):
             sql = (
                 f"SELECT count(*) as count "
                 f"FROM {EDGE_TYPE} "
-                f"WHERE out.id IN ['{_esc(subject_id)}', '{_esc(object_id)}'] "
-                f"OR in.id IN ['{_esc(subject_id)}', '{_esc(object_id)}']"
+                f"WHERE subject_id IN ['{_esc(subject_id)}', '{_esc(object_id)}'] "
+                f"OR object_id IN ['{_esc(subject_id)}', '{_esc(object_id)}']"
             )
             rows = await self._command(sql)
             result.append(int(rows[0].get("count", 0)) if rows else 0)
@@ -171,22 +172,29 @@ class ArcadeDBStorage(BaseGraphStorage):
     async def get_edges(self, edge_specs: List[EdgeSpec]) -> List[Optional[Relation]]:
         result: List[Optional[Relation]] = []
         for subject_id, object_id, relation_id in edge_specs:
-            sql = f"SELECT FROM {EDGE_TYPE} WHERE out.id = '{_esc(subject_id)}' AND in.id = '{_esc(object_id)}'"
+            sql = f"SELECT FROM {EDGE_TYPE} WHERE subject_id = '{_esc(subject_id)}' AND object_id = '{_esc(object_id)}'"
             if relation_id:
                 sql += f" AND id = '{_esc(relation_id)}'"
             rows = await self._command(sql)
-            result.append(_relation_from_row(rows[0], subject_id, object_id) if rows else None)
+            result.append(_relation_from_row(rows[0]) if rows else None)
         return result
 
     async def upsert_edges(self, edges: List[Relation]) -> None:
         for edge in edges:
-            await self._command(
-                f"DELETE FROM {EDGE_TYPE} WHERE id = '{_esc(edge.id)}' "
-                f"OR (out.id = '{_esc(edge.subject_id)}' AND in.id = '{_esc(edge.object_id)}' AND relation_type = '{_esc(edge.relation_type)}')"
+            # 1. Cleanly delete the old edge using string properties (Avoids graph traversal 500 errors)
+            del_sql = (
+                f"DELETE FROM {EDGE_TYPE} "
+                f"WHERE subject_id = '{_esc(edge.subject_id)}' "
+                f"AND object_id = '{_esc(edge.object_id)}' "
+                f"AND relation_type = '{_esc(edge.relation_type)}'"
             )
-            
+            await self._command(del_sql)
+
+            # 2. Create the new edge and populate all properties including endpoints
             content = {
                 "id": str(edge.id),
+                "subject_id": str(edge.subject_id),
+                "object_id": str(edge.object_id),
                 "subject_name": edge.subject_name,
                 "object_name": edge.object_name,
                 "relation_type": edge.relation_type,
@@ -194,23 +202,23 @@ class ArcadeDBStorage(BaseGraphStorage):
                 "relation_strength": float(edge.relation_strength),
                 "source_chunk_id": json.dumps(list(edge.source_chunk_id)),
             }
-            
+
             set_parts = []
             for k, v in content.items():
                 val = f"'{_esc(v)}'" if isinstance(v, str) else str(v)
                 set_parts.append(f"{k} = {val}")
 
-            sql = (
+            create_sql = (
                 f"CREATE EDGE {EDGE_TYPE} "
                 f"FROM (SELECT FROM {VERTEX_TYPE} WHERE id = '{_esc(edge.subject_id)}') "
                 f"TO (SELECT FROM {VERTEX_TYPE} WHERE id = '{_esc(edge.object_id)}') "
                 f"SET {', '.join(set_parts)}"
             )
-            await self._command(sql)
+            await self._command(create_sql)
 
     async def delete_edges(self, edge_specs: List[EdgeSpec]) -> None:
         for subject_id, object_id, relation_id in edge_specs:
-            sql = f"DELETE FROM {EDGE_TYPE} WHERE out.id = '{_esc(subject_id)}' AND in.id = '{_esc(object_id)}'"
+            sql = f"DELETE FROM {EDGE_TYPE} WHERE subject_id = '{_esc(subject_id)}' AND object_id = '{_esc(object_id)}'"
             if relation_id:
                 sql += f" AND id = '{_esc(relation_id)}'"
             await self._command(sql)
@@ -218,15 +226,9 @@ class ArcadeDBStorage(BaseGraphStorage):
     async def get_all_edges_for_nodes(self, node_ids: List[str]) -> List[List[Relation]]:
         result: List[List[Relation]] = []
         for nid in node_ids:
-            sql = f"SELECT expand(bothE('{EDGE_TYPE}')) FROM {VERTEX_TYPE} WHERE id = '{_esc(nid)}'"
+            sql = f"SELECT FROM {EDGE_TYPE} WHERE subject_id = '{_esc(nid)}' OR object_id = '{_esc(nid)}'"
             rows = await self._command(sql)
-            rels = []
-            for r in rows:
-                s_id = r.get("out")
-                o_id = r.get("in")
-                if isinstance(s_id, dict): s_id = s_id.get("id", nid)
-                if isinstance(o_id, dict): o_id = o_id.get("id", nid)
-                rels.append(_relation_from_row(r, str(s_id or nid), str(o_id or nid)))
+            rels = [_relation_from_row(r) for r in rows]
             result.append(rels)
         return result
 
@@ -236,14 +238,7 @@ class ArcadeDBStorage(BaseGraphStorage):
 
     async def get_all_edges(self) -> List[Relation]:
         rows = await self._command(f"SELECT FROM {EDGE_TYPE}")
-        result: List[Relation] = []
-        for r in rows:
-            s_id = r.get("out")
-            o_id = r.get("in")
-            if isinstance(s_id, dict): s_id = s_id.get("id", "")
-            if isinstance(o_id, dict): o_id = o_id.get("id", "")
-            result.append(_relation_from_row(r, str(s_id or ""), str(o_id or "")))
-        return result
+        return [_relation_from_row(r) for r in rows]
 
     async def close(self) -> None:
         if self._client is not None:
