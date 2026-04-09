@@ -13,7 +13,7 @@ WORKDIR /app
 
 COPY --from=builder /src/dist/*.whl /tmp/
 RUN uv pip install --system /tmp/*.whl && rm -f /tmp/*.whl
-RUN uv pip install --system fastapi==0.110.2 uvicorn==0.29.0 httpx==0.27.0
+RUN uv pip install --system fastapi==0.110.2 uvicorn==0.29.0 httpx==0.27.0 neo4j==5.28.1
 
 COPY examples/fastapi_demo/server.py /app/server.py
 

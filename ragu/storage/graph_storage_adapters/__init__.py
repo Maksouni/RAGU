@@ -1,4 +1,4 @@
 from .networkx_adapter import NetworkXStorage
-from .arcadedb_adapter import ArcadeDBStorage
+from .memgraph_adapter import MemgraphStorage
 
-__all__ = ["NetworkXStorage", "ArcadeDBStorage"]
+__all__ = ["NetworkXStorage", "MemgraphStorage"]

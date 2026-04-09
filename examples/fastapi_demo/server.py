@@ -18,7 +18,7 @@ from ragu import (
 )
 from ragu.embedder import OpenAIEmbedder
 from ragu.llm import OpenAIClient
-from ragu.storage.graph_storage_adapters.arcadedb_adapter import ArcadeDBStorage
+from ragu.storage.graph_storage_adapters.memgraph_adapter import MemgraphStorage
 from ragu.storage.index import StorageArguments
 
 
@@ -58,11 +58,12 @@ async def lifespan(app: FastAPI):
     Settings.language = "russian"
 
     storage_args = StorageArguments(
-        graph_backend_storage=ArcadeDBStorage,
+        graph_backend_storage=MemgraphStorage,
         graph_storage_kwargs={
-            "url": "http://knb:2480",
-            "database": "tododb",
-            "auth": ("root", "playwithdata"),
+            "uri": os.getenv("MEMGRAPH_URI", "bolt://memgraph:7687"),
+            "database": os.getenv("MEMGRAPH_DATABASE") or None,
+            "username": os.getenv("MEMGRAPH_USERNAME") or None,
+            "password": os.getenv("MEMGRAPH_PASSWORD") or None,
         },
     )
 

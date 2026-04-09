@@ -3,7 +3,7 @@
 This demo runs a GraphRAG-style API service with:
 
 - `grg`: FastAPI app from `server.py`
-- `knb`: ArcadeDB backend for graph storage
+- `memgraph`: Memgraph backend for graph storage
 - `vllm`: OpenAI-compatible LLM endpoint
 - `vllm-embed`: OpenAI-compatible embeddings endpoint
 
@@ -41,4 +41,6 @@ When startup is complete, you should see the API at:
 - Ingestion runs in the background; new ingestion requests return `409` while indexing is busy.
 - Empty ingestion payloads return `400`.
 - If service initialization has not finished, query endpoints may return `503`.
+- Memgraph Bolt endpoint is available at `127.0.0.1:7687`.
+- Optional Memgraph connection env vars for `grg`: `MEMGRAPH_URI`, `MEMGRAPH_DATABASE`, `MEMGRAPH_USERNAME`, `MEMGRAPH_PASSWORD`.
 
