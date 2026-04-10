@@ -1,6 +1,6 @@
 services:
   memgraph:
-    image: memgraph/memgraph:2.19.1
+    image: memgraph/memgraph:3.8.1
     container_name: memgraph-demo
     ports:
       - "127.0.0.1:7687:7687"

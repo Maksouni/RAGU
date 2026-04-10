@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 
 import openai
@@ -12,7 +13,7 @@ logger.remove()
 logger.add(
     sys.stdout,
     colorize=True,
-    enqueue=True,
+    enqueue=False if os.name == "nt" else True,
     level="INFO",
     format="<cyan>{time:HH:mm:ss}</cyan> | <level>{level: <8}</level> | <level>{message}</level>"
 )

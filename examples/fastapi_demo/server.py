@@ -1,9 +1,12 @@
 import json
 import os
+import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Union
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -20,6 +23,9 @@ from ragu.embedder import OpenAIEmbedder
 from ragu.llm import OpenAIClient
 from ragu.storage.graph_storage_adapters.memgraph_adapter import MemgraphStorage
 from ragu.storage.index import StorageArguments
+
+# Load .env from repo root for local runs.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
 class AppState:
@@ -38,6 +44,74 @@ class QueryRequest(BaseModel):
 
 class JsonIngestRequest(BaseModel):
     data: List[Union[Dict[str, Any], str]]
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _tokenize(text: str) -> List[str]:
+    return [t for t in re.findall(r"\w+", text.lower()) if len(t) >= 3]
+
+
+def _match_score(content: str, tokens: List[str]) -> int:
+    lowered = content.lower()
+    return sum(1 for token in tokens if token in lowered)
+
+
+async def build_no_llm_answer(question: str) -> str:
+    if not state.knowledge_graph:
+        return "Режим без LLM включен, но граф еще не инициализирован."
+
+    backend = state.knowledge_graph.index.graph_backend
+    nodes = await backend.get_all_nodes()
+    edges = await backend.get_all_edges()
+    tokens = _tokenize(question)
+
+    node_candidates = []
+    for node in nodes:
+        haystack = f"{node.entity_name} {node.entity_type} {node.description}"
+        score = _match_score(haystack, tokens)
+        if score > 0:
+            node_candidates.append((score, node))
+    node_candidates.sort(key=lambda x: x[0], reverse=True)
+
+    edge_candidates = []
+    for edge in edges:
+        haystack = (
+            f"{edge.subject_name} {edge.object_name} {edge.relation_type} {edge.description}"
+        )
+        score = _match_score(haystack, tokens)
+        if score > 0:
+            edge_candidates.append((score, edge))
+    edge_candidates.sort(key=lambda x: x[0], reverse=True)
+
+    lines = [
+        "Режим без LLM включен.",
+        f"В графе: {len(nodes)} сущностей, {len(edges)} связей.",
+    ]
+
+    if node_candidates:
+        lines.append("Наиболее релевантные сущности:")
+        for _, node in node_candidates[:5]:
+            lines.append(f"- {node.entity_name} [{node.entity_type}] (id={node.id})")
+    else:
+        lines.append("По вопросу не найдено явных совпадений по сущностям.")
+
+    if edge_candidates:
+        lines.append("Наиболее релевантные связи:")
+        for _, edge in edge_candidates[:5]:
+            lines.append(
+                f"- {edge.subject_name} -[{edge.relation_type}]-> {edge.object_name} (id={edge.id})"
+            )
+
+    lines.append(
+        "Для генеративного ответа отключите флаг DISABLE_LLM_ANSWERS в .env."
+    )
+    return "\n".join(lines)
 
 
 @asynccontextmanager
@@ -101,18 +175,26 @@ async def run_indexing(docs: List[str], source_desc: str):
 
 @app.post("/ask/local")
 async def ask_local(request: QueryRequest):
+    if _env_flag("DISABLE_LLM_ANSWERS", False):
+        answer = await build_no_llm_answer(request.question)
+        return {"answer": answer, "mode": "no_llm"}
+
     if not state.local_search_engine:
         raise HTTPException(status_code=503, detail="Search engine not ready")
     answer = await state.local_search_engine.a_query(request.question)
-    return {"answer": answer}
+    return {"answer": answer, "mode": "llm"}
 
 
 @app.post("/ask/global")
 async def ask_global(request: QueryRequest):
+    if _env_flag("DISABLE_LLM_ANSWERS", False):
+        answer = await build_no_llm_answer(request.question)
+        return {"answer": answer, "mode": "no_llm"}
+
     if not state.global_search_engine:
         raise HTTPException(status_code=503, detail="Search engine not ready")
     answer = await state.global_search_engine.a_query(request.question)
-    return {"answer": answer}
+    return {"answer": answer, "mode": "llm"}
 
 
 @app.post("/ingest/json")
