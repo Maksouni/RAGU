@@ -1,0 +1,17 @@
+{
+  "template_id": "windows-python-exe",
+  "source_name": "python-org-windows",
+  "package_format": "exe",
+  "parser_type": "exe_html",
+  "product_hint": "python",
+  "os": "windows",
+  "os_version": "*",
+  "list_url": "https://www.python.org/downloads/windows/",
+  "source_url": "https://www.python.org/downloads/windows/",
+  "base_url": "https://www.python.org/downloads/windows/",
+  "enabled": true,
+  "metadata": {
+    "vendor": "python.org"
+  }
+}
+

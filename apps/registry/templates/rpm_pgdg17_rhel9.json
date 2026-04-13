@@ -1,0 +1,17 @@
+{
+  "template_id": "rhel9-pgdg-rpm",
+  "source_name": "pgdg-yum-rhel9",
+  "package_format": "rpm",
+  "parser_type": "rpm_html",
+  "product_hint": "postgresql",
+  "os": "rhel",
+  "os_version": "9",
+  "list_url": "https://download.postgresql.org/pub/repos/yum/17/redhat/rhel-9-x86_64/",
+  "source_url": "https://download.postgresql.org/pub/repos/yum/17/redhat/",
+  "base_url": "https://download.postgresql.org/pub/repos/yum/17/redhat/rhel-9-x86_64/",
+  "enabled": true,
+  "metadata": {
+    "repo_family": "pgdg"
+  }
+}
+

@@ -1,0 +1,17 @@
+{
+  "template_id": "debian13-pgdg-deb",
+  "source_name": "pgdg-apt-debian13",
+  "package_format": "deb",
+  "parser_type": "deb_html",
+  "product_hint": "postgresql",
+  "os": "debian",
+  "os_version": "13",
+  "list_url": "https://ftp.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/",
+  "source_url": "https://ftp.postgresql.org/pub/repos/apt/",
+  "base_url": "https://ftp.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/",
+  "enabled": true,
+  "metadata": {
+    "codename": "trixie"
+  }
+}
+

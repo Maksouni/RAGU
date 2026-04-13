@@ -1,0 +1,17 @@
+{
+  "template_id": "ubuntu2404-python312-deb",
+  "source_name": "ubuntu-archive-python312",
+  "package_format": "deb",
+  "parser_type": "deb_html",
+  "product_hint": "python",
+  "os": "ubuntu",
+  "os_version": "24.04",
+  "list_url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.12/",
+  "source_url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.12/",
+  "base_url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.12/",
+  "enabled": true,
+  "metadata": {
+    "series": "noble"
+  }
+}
+

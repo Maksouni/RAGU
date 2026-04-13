@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from hashlib import md5
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Union
@@ -20,12 +21,14 @@ from ragu import (
     SimpleChunker,
 )
 from ragu.embedder import OpenAIEmbedder
+from ragu.graph.types import Entity
 from ragu.llm import OpenAIClient
 from ragu.storage.graph_storage_adapters.memgraph_adapter import MemgraphStorage
 from ragu.storage.index import StorageArguments
 
 # Load .env from repo root for local runs.
-load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+# Use override=True so explicit project config wins over stale shell vars.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
 
 class AppState:
@@ -114,6 +117,27 @@ async def build_no_llm_answer(question: str) -> str:
     return "\n".join(lines)
 
 
+def build_fast_entities_from_docs(docs: List[str]) -> List[Entity]:
+    entities: List[Entity] = []
+    for idx, doc in enumerate(docs):
+        normalized = " ".join(doc.split())
+        doc_hash = md5(normalized.encode("utf-8")).hexdigest()[:12]
+        entity_id = f"stub_doc_{idx}_{doc_hash}"
+        entity_name = normalized[:80] if normalized else f"doc_{idx}"
+        entities.append(
+            Entity(
+                id=entity_id,
+                entity_name=entity_name,
+                entity_type="DocumentSnippet",
+                description=normalized,
+                source_chunk_id=[],
+                documents_id=[],
+                clusters=[],
+            )
+        )
+    return entities
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     client = OpenAIClient(
@@ -165,7 +189,13 @@ async def run_indexing(docs: List[str], source_desc: str):
     state.is_indexing = True
     try:
         print(f"Indexing {len(docs)} docs from {source_desc}...")
-        await state.knowledge_graph.build_from_docs(docs)
+        if _env_flag("DISABLE_LLM_ANSWERS", False):
+            # Fast path for low-resource development: skip LLM extraction and create
+            # lightweight document entities directly in graph storage.
+            entities = build_fast_entities_from_docs(docs)
+            await state.knowledge_graph.index.graph_backend.upsert_nodes(entities)
+        else:
+            await state.knowledge_graph.build_from_docs(docs)
         print(f"Indexing from {source_desc} finished.")
     except Exception as e:
         print(f"Indexing error: {e}")
