@@ -7,6 +7,7 @@ from apps.common.models import AskExchangeEvent
 from apps.common.outbox import OutboxRepository
 from apps.common.settings import IntegrationSettings
 from apps.sheets_sync.worker import SheetsSyncWorker
+from apps.sheets_sync.worker import GoogleSheetsBackend
 
 
 class FakeSheetsBackend:
@@ -58,3 +59,37 @@ def test_sheets_sync_idempotent() -> None:
     assert len(backend.tables["answers"]) == 1
     assert len(backend.tables["ingest_jobs"]) == 1
     assert backend.errors == []
+
+
+class FakeWorksheet:
+    def __init__(self, values: list[list[str]]) -> None:
+        self.values = values
+        self.cleared = False
+
+    def get_all_values(self) -> list[list[str]]:
+        return self.values
+
+    def clear(self) -> None:
+        self.cleared = True
+        self.values = []
+
+    def update(self, range_name: str, values: list[list[str]]) -> None:
+        self.values = values
+
+
+def test_google_backend_compacts_blank_rows() -> None:
+    backend = GoogleSheetsBackend(settings=IntegrationSettings())
+    worksheet = FakeWorksheet(
+        [
+            ["event_id", "user_id", "question", "answer", "timestamp_nsk", "response_time_ms", "response_mode", "answer_mode", "cache_hit"],
+            ["", "", "", "", "", "", "", "", ""],
+            ["evt-1", "u1", "postgresql", "answer", "2026-05-06", "10", "mode", "no_llm", "False"],
+            ["", "", "", "", "", "", "", "", ""],
+        ]
+    )
+
+    backend._compact_blank_rows(worksheet, "overview")
+
+    assert worksheet.cleared is True
+    assert len(worksheet.values) == 2
+    assert worksheet.values[1][0] == "evt-1"

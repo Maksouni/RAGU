@@ -9,15 +9,25 @@ ScenarioType = Literal["versions_by_os", "formats_by_version"]
 PackageFormat = Literal["deb", "rpm", "apk", "exe"]
 
 _PRODUCT_VERSION_OS_RE = re.compile(
-    r"(?P<product>[a-zA-Zа-яА-Я0-9+_.-]+)\s+(?P<version>\d+(?:\.\d+)+)\s+(?:для|for)\s+(?P<os>[a-zA-Zа-яА-Я]+)(?:\s+(?P<osv>[0-9][0-9.]*))?",
+    r"(?P<product>[a-zA-Zа-яА-Я0-9+_.-]+)\s+"
+    r"(?P<version>\d+(?:\.\d+)+)\s+"
+    r"(?:для|for)\s+"
+    r"(?P<os>[a-zA-Zа-яА-Я]+)"
+    r"(?:\s+(?P<osv>[0-9][0-9.]*))?",
     re.IGNORECASE,
 )
 _VERSIONS_FOR_OS_RE = re.compile(
-    r"(?:все\s+)?верс\w+.*?(?P<product>postgresql|python)\s+(?:для|for)\s+(?P<os>[a-zA-Zа-яА-Я]+)\s*(?P<osv>[0-9][0-9.]*)?",
+    r"(?:все\s+)?верс\w+.*?"
+    r"(?P<product>postgresql|python)\s+"
+    r"(?:для|for)\s+"
+    r"(?P<os>[a-zA-Zа-яА-Я]+)\s*"
+    r"(?P<osv>[0-9][0-9.]*)?",
     re.IGNORECASE,
 )
 _PACKAGES_BY_VERSION_RE = re.compile(
-    r"(?:все\s+)?пакет\w+.*?(?P<product>postgresql|python)\s+(?P<version>\d+(?:\.\d+)+)",
+    r"(?:все\s+)?пакет\w+.*?"
+    r"(?P<product>postgresql|python)\s+"
+    r"(?P<version>\d+(?:\.\d+)+)",
     re.IGNORECASE,
 )
 _ANY_VERSION_RE = re.compile(r"(?P<version>\d+(?:\.\d+)+)")
@@ -182,7 +192,6 @@ def parse_scenario_query(text: str) -> ScenarioQuery | None:
             raw_query=raw,
         )
 
-    # Generic fallback: when query has a version number and product-like token.
     any_version = _ANY_VERSION_RE.search(raw)
     if any_version:
         return ScenarioQuery(

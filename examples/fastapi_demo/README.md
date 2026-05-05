@@ -18,6 +18,33 @@ The service listens on `http://127.0.0.1:8000` and provides:
 - `POST /ask/global` - global (community-level) search
 - `GET /status` - indexing status
 
+`/ask/local` and `/ask/global` accept `answer_mode` in the request body:
+
+- `auto` - use `.env` (`DISABLE_LLM_ANSWERS`)
+- `llm` - force LLM answer generation for this request
+- `no_llm` - force template answer without LLM generation; embeddings are still used for semantic search
+
+## Bot Integrations
+
+The integration layer can run Telegram, VK, both bots, or no bot from `.env`:
+
+```dotenv
+BOT_PLATFORM=telegram   # telegram | vk | both | none
+TELEGRAM_BOT_TOKEN=
+VK_BOT_TOKEN=
+VK_GROUP_ID=
+VK_API_VERSION=5.199
+VK_LONG_POLL_WAIT_SEC=25
+```
+
+Users can ask questions as normal text. `/local` and `/global` are still supported for compatibility,
+but the default flow uses `DEFAULT_ASK_MODE=local`, so users do not need to type a mode before every query.
+
+Answer style can be switched per message:
+
+- `/llm <question>` - generated natural answer
+- `/nollm <question>` - deterministic structured answer without LLM generation
+
 ## Prerequisites
 
 - Docker + Docker Compose
@@ -43,4 +70,5 @@ When startup is complete, you should see the API at:
 - If service initialization has not finished, query endpoints may return `503`.
 - Memgraph Bolt endpoint is available at `127.0.0.1:7687`.
 - Optional Memgraph connection env vars for `grg`: `MEMGRAPH_URI`, `MEMGRAPH_DATABASE`, `MEMGRAPH_USERNAME`, `MEMGRAPH_PASSWORD`.
+- For laptop-friendly local runs, keep `EMBEDDING_DIM=20`; vectors are truncated to this size even if the embedding model returns a larger vector.
 

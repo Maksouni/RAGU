@@ -82,6 +82,93 @@ function Stop-ListenerOnPort {
     }
 }
 
+function Test-TcpPort {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutMs = 1000
+    )
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connectTask = $client.ConnectAsync($HostName, $Port)
+        $ready = $connectTask.Wait($TimeoutMs)
+        if ($ready -and $client.Connected) {
+            $client.Close()
+            return $true
+        }
+        $client.Close()
+    } catch {
+        return $false
+    }
+    return $false
+}
+
+function Wait-TcpPort {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutSec = 60,
+        [string]$Name = "service"
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-TcpPort -HostName $HostName -Port $Port -TimeoutMs 1000) {
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "$Name did not open $HostName`:$Port within ${TimeoutSec}s."
+}
+
+function Test-DockerReady {
+    param([Parameter(Mandatory = $true)][string]$DockerPath)
+    try {
+        & $DockerPath version *> $null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+function Ensure-DockerReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$DockerPath,
+        [int]$TimeoutSec = 180
+    )
+    if (Test-DockerReady -DockerPath $DockerPath) {
+        return
+    }
+
+    $dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path -LiteralPath $dockerDesktop) {
+        Write-Host "Docker API is not ready, starting Docker Desktop..."
+        Start-Process -FilePath $dockerDesktop -WindowStyle Hidden | Out-Null
+    } else {
+        Write-Host "Docker API is not ready and Docker Desktop executable was not found."
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-DockerReady -DockerPath $DockerPath) {
+            return
+        }
+        Start-Sleep -Seconds 3
+    }
+    throw "Docker API is not reachable. Start Docker Desktop manually and rerun the script."
+}
+
+function Invoke-DockerCompose {
+    param(
+        [Parameter(Mandatory = $true)][string]$DockerPath,
+        [Parameter(Mandatory = $true)][string]$ComposeFile,
+        [Parameter(Mandatory = $true)][string[]]$ComposeArgs
+    )
+    & $DockerPath compose -f $ComposeFile @ComposeArgs | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose $($ComposeArgs -join ' ') failed with exit code $LASTEXITCODE"
+    }
+}
+
 function Stop-ProcessByPidFile {
     param(
         [Parameter(Mandatory = $true)][string]$PidFilePath,
@@ -195,6 +282,67 @@ function Normalize-ProxyVariables {
     }
 }
 
+function Test-OllamaModelPresent {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelName,
+        [Parameter(Mandatory = $true)][string[]]$Tags
+    )
+    if ($Tags -contains $ModelName) {
+        return $true
+    }
+    if ($ModelName.Contains(":")) {
+        return $false
+    }
+    return $null -ne ($Tags | Where-Object { $_ -eq "$ModelName`:latest" })
+}
+
+function Get-OllamaTags {
+    param([Parameter(Mandatory = $true)][string]$ApiRoot)
+    try {
+        $resp = Invoke-RestMethod -Uri "$ApiRoot/api/tags" -Method Get -TimeoutSec 4
+        if ($null -eq $resp.models) {
+            return @()
+        }
+        return @($resp.models | ForEach-Object { "$($_.name)" })
+    } catch {
+        return @()
+    }
+}
+
+function Ensure-OllamaApiReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$OllamaBin,
+        [Parameter(Mandatory = $true)][string]$ApiRoot
+    )
+    $tags = Get-OllamaTags -ApiRoot $ApiRoot
+    if (@($tags).Count -gt 0) {
+        return
+    }
+
+    Write-Host "Ollama API is not ready, starting ollama serve ..."
+    Start-Process -FilePath $OllamaBin -ArgumentList "serve" -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Seconds 1
+        $tags = Get-OllamaTags -ApiRoot $ApiRoot
+        if (@($tags).Count -gt 0) {
+            return
+        }
+    }
+
+    Write-Host "Ollama still not responding, restarting Ollama processes ..."
+    Get-Process | Where-Object { $_.ProcessName -like "*ollama*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-Process -FilePath $OllamaBin -ArgumentList "serve" -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 25; $i++) {
+        Start-Sleep -Seconds 1
+        $tags = Get-OllamaTags -ApiRoot $ApiRoot
+        if (@($tags).Count -gt 0) {
+            return
+        }
+    }
+    throw "Ollama API is not reachable at $ApiRoot/api/tags."
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $composeFile = Join-Path $repoRoot "examples\fastapi_demo\docker-compose.yml"
 $python = Join-Path $repoRoot "venv\Scripts\python.exe"
@@ -209,6 +357,9 @@ $orchestratorStderrLog = Join-Path $runDir "orchestrator.stderr.log"
 $botPidFile = Join-Path $runDir "bot.pid"
 $botStdoutLog = Join-Path $runDir "bot.stdout.log"
 $botStderrLog = Join-Path $runDir "bot.stderr.log"
+$vkBotPidFile = Join-Path $runDir "vk_bot.pid"
+$vkBotStdoutLog = Join-Path $runDir "vk_bot.stdout.log"
+$vkBotStderrLog = Join-Path $runDir "vk_bot.stderr.log"
 $sheetsPidFile = Join-Path $runDir "sheets_sync.pid"
 $sheetsStdoutLog = Join-Path $runDir "sheets_sync.stdout.log"
 $sheetsStderrLog = Join-Path $runDir "sheets_sync.stderr.log"
@@ -228,6 +379,7 @@ if (-not $dockerBin) {
 Import-DotEnv -Path $envFile
 Normalize-PathVariables
 Normalize-ProxyVariables
+Ensure-DockerReady -DockerPath $dockerBin
 
 Ensure-EnvDefault -Name "API_KEY" -Value "local"
 Ensure-EnvDefault -Name "BASE_URL" -Value "http://127.0.0.1:11434/v1"
@@ -237,6 +389,13 @@ Ensure-EnvDefault -Name "EMBEDDER_MODEL_NAME" -Value "nomic-embed-text"
 Ensure-EnvDefault -Name "MEMGRAPH_URI" -Value "bolt://127.0.0.1:7687"
 Ensure-EnvDefault -Name "OLLAMA_AUTO_PULL" -Value "false"
 Ensure-EnvDefault -Name "MEMGRAPH_LAB_ENABLED" -Value "true"
+Ensure-EnvDefault -Name "BOT_PLATFORM" -Value "telegram"
+$sheetsEnabled = ([System.Environment]::GetEnvironmentVariable("SHEETS_SYNC_ENABLED", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
+$googleCredsPath = [System.Environment]::GetEnvironmentVariable("GOOGLE_SERVICE_ACCOUNT_JSON_PATH", "Process")
+if ($sheetsEnabled -and -not [string]::IsNullOrWhiteSpace($googleCredsPath) -and -not (Test-Path -LiteralPath $googleCredsPath)) {
+    Write-Host "WARNING: Google Sheets credentials file does not exist: $googleCredsPath"
+    Write-Host "Sheets worker will stay alive, but rows cannot sync until GOOGLE_SERVICE_ACCOUNT_JSON_PATH is fixed."
+}
 $disableLlm = ([System.Environment]::GetEnvironmentVariable("DISABLE_LLM_ANSWERS", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
 $autoPullModels = ([System.Environment]::GetEnvironmentVariable("OLLAMA_AUTO_PULL", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
 $memgraphLabEnabled = ([System.Environment]::GetEnvironmentVariable("MEMGRAPH_LAB_ENABLED", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
@@ -252,38 +411,54 @@ if ([string]::IsNullOrWhiteSpace($startupTimeoutRaw)) {
 }
 if ($startupTimeout -lt 10) { $startupTimeout = 120 }
 
-if (-not $disableLlm) {
-    $ollamaBin = Resolve-ToolPath -CommandName "ollama" -FallbackPaths @(
-        (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
-        "C:\Program Files\Ollama\ollama.exe"
-    )
-    if (-not $ollamaBin) {
-        throw "Ollama is not installed or not in PATH. Install Ollama or set OLLAMA_BIN in .env."
-    }
-    [System.Environment]::SetEnvironmentVariable("OLLAMA_BIN", $ollamaBin, "Process")
-    Write-Host "Checking Ollama models..."
-    $modelsRaw = & $ollamaBin list
-    $llmModel = [System.Environment]::GetEnvironmentVariable("LLM_MODEL_NAME", "Process")
-    $embModel = [System.Environment]::GetEnvironmentVariable("EMBEDDER_MODEL_NAME", "Process")
-    $hasLlm = $null -ne ($modelsRaw | Select-String -SimpleMatch "$llmModel")
-    $hasEmb = $null -ne ($modelsRaw | Select-String -SimpleMatch "$embModel")
+$ollamaBin = Resolve-ToolPath -CommandName "ollama" -FallbackPaths @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
+    "C:\Program Files\Ollama\ollama.exe"
+)
+if (-not $ollamaBin) {
+    throw "Ollama is not installed or not in PATH. Install Ollama or set OLLAMA_BIN in .env."
+}
+[System.Environment]::SetEnvironmentVariable("OLLAMA_BIN", $ollamaBin, "Process")
 
-    if (-not $hasLlm -or -not $hasEmb) {
-        if (-not $autoPullModels) {
-            throw "Required Ollama models are missing (LLM='$llmModel', EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $llmModel ; ollama pull $embModel"
+$baseUrl = ([System.Environment]::GetEnvironmentVariable("BASE_URL", "Process") + "").Trim()
+if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+    $baseUrl = "http://127.0.0.1:11434/v1"
+}
+$ollamaApiRoot = $baseUrl -replace "/v1/?$", ""
+
+Ensure-OllamaApiReady -OllamaBin $ollamaBin -ApiRoot $ollamaApiRoot
+if ($disableLlm) {
+    Write-Host "DISABLE_LLM_ANSWERS=true -> LLM generation is disabled, embeddings stay enabled for semantic search."
+}
+Write-Host "Checking Ollama models..."
+$modelTags = Get-OllamaTags -ApiRoot $ollamaApiRoot
+$llmModel = [System.Environment]::GetEnvironmentVariable("LLM_MODEL_NAME", "Process")
+$embModel = [System.Environment]::GetEnvironmentVariable("EMBEDDER_MODEL_NAME", "Process")
+$hasLlm = Test-OllamaModelPresent -ModelName $llmModel -Tags $modelTags
+$hasEmb = Test-OllamaModelPresent -ModelName $embModel -Tags $modelTags
+
+if ((-not $hasEmb) -or ((-not $disableLlm) -and (-not $hasLlm))) {
+    if (-not $autoPullModels) {
+        if ($disableLlm) {
+            throw "Required Ollama embedder model is missing (EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $embModel"
         }
+        throw "Required Ollama models are missing (LLM='$llmModel', EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $llmModel ; ollama pull $embModel"
     }
+}
 
-    if (-not $hasLlm) {
-        Write-Host "Pulling LLM model $llmModel ..."
-        & $ollamaBin pull $llmModel | Out-Host
-    }
-    if (-not $hasEmb) {
-        Write-Host "Pulling embedder model $embModel ..."
-        & $ollamaBin pull $embModel | Out-Host
-    }
-} else {
-    Write-Host "DISABLE_LLM_ANSWERS=true -> skip Ollama checks."
+if ((-not $disableLlm) -and (-not $hasLlm)) {
+    Write-Host "Pulling LLM model $llmModel ..."
+    & $ollamaBin pull $llmModel | Out-Host
+}
+if (-not $hasEmb) {
+    Write-Host "Pulling embedder model $embModel ..."
+    & $ollamaBin pull $embModel | Out-Host
+}
+$modelTags = Get-OllamaTags -ApiRoot $ollamaApiRoot
+$hasLlm = Test-OllamaModelPresent -ModelName $llmModel -Tags $modelTags
+$hasEmb = Test-OllamaModelPresent -ModelName $embModel -Tags $modelTags
+if (-not $hasEmb -or ((-not $disableLlm) -and (-not $hasLlm))) {
+    throw "Ollama API is up, but required models are still unavailable (LLM='$llmModel', EMB='$embModel')."
 }
 
 Write-Host "Starting Memgraph..."
@@ -293,17 +468,18 @@ if ($memgraphLabEnabled) {
 try {
     if ($memgraphLabEnabled) {
         try {
-            & $dockerBin compose -f $composeFile up -d memgraph memgraph-lab | Out-Host
+            Invoke-DockerCompose -DockerPath $dockerBin -ComposeFile $composeFile -ComposeArgs @("up", "-d", "memgraph", "memgraph-lab")
         } catch {
             Write-Host "Failed to start memgraph-lab. Starting Memgraph without UI. Error: $($_.Exception.Message)"
-            & $dockerBin compose -f $composeFile up -d memgraph | Out-Host
+            Invoke-DockerCompose -DockerPath $dockerBin -ComposeFile $composeFile -ComposeArgs @("up", "-d", "memgraph")
         }
     } else {
-        & $dockerBin compose -f $composeFile up -d memgraph | Out-Host
+        Invoke-DockerCompose -DockerPath $dockerBin -ComposeFile $composeFile -ComposeArgs @("up", "-d", "memgraph")
     }
 } catch {
     throw "Failed to start Memgraph via Docker. Check Docker Desktop and permissions. Original error: $($_.Exception.Message)"
 }
+Wait-TcpPort -HostName "127.0.0.1" -Port 7687 -TimeoutSec 90 -Name "Memgraph Bolt"
 
 if (-not (Test-Path -LiteralPath $runDir)) {
     New-Item -ItemType Directory -Path $runDir | Out-Null
@@ -363,15 +539,27 @@ Start-ManagedProcess `
     -StdoutLogPath $sheetsStdoutLog `
     -StderrLogPath $sheetsStderrLog | Out-Null
 
-$tgToken = [System.Environment]::GetEnvironmentVariable("TELEGRAM_BOT_TOKEN", "Process")
-if ([string]::IsNullOrWhiteSpace($tgToken)) {
-    Write-Host "TELEGRAM_BOT_TOKEN is empty -> skip bot startup."
-} else {
-    if (-not (Test-PythonModule -PythonPath $python -ModuleName "aiogram")) {
-        Write-Host "aiogram is not installed in venv -> skip bot startup."
+$botPlatform = ([System.Environment]::GetEnvironmentVariable("BOT_PLATFORM", "Process") + "").Trim().ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($botPlatform)) {
+    $botPlatform = "telegram"
+}
+$startTelegram = $botPlatform -in @("telegram", "both")
+$startVk = $botPlatform -in @("vk", "both")
+
+if (-not ($botPlatform -in @("telegram", "vk", "both", "none"))) {
+    throw "Unsupported BOT_PLATFORM='$botPlatform'. Use telegram, vk, both, or none."
+}
+
+if ($startTelegram) {
+    $tgToken = [System.Environment]::GetEnvironmentVariable("TELEGRAM_BOT_TOKEN", "Process")
+    if ([string]::IsNullOrWhiteSpace($tgToken)) {
+        Write-Host "TELEGRAM_BOT_TOKEN is empty -> skip Telegram bot startup."
+        Remove-Item -LiteralPath $botPidFile -Force -ErrorAction SilentlyContinue
+    } elseif (-not (Test-PythonModule -PythonPath $python -ModuleName "aiogram")) {
+        Write-Host "aiogram is not installed in venv -> skip Telegram bot startup."
         Remove-Item -LiteralPath $botPidFile -Force -ErrorAction SilentlyContinue
     } else {
-        Write-Host "Starting telegram bot..."
+        Write-Host "Starting Telegram bot..."
         Start-ManagedProcess `
             -Name "TelegramBot" `
             -PythonPath $python `
@@ -381,8 +569,31 @@ if ([string]::IsNullOrWhiteSpace($tgToken)) {
             -StdoutLogPath $botStdoutLog `
             -StderrLogPath $botStderrLog | Out-Null
     }
+} else {
+    Write-Host "BOT_PLATFORM=$botPlatform -> skip Telegram bot startup."
+    Remove-Item -LiteralPath $botPidFile -Force -ErrorAction SilentlyContinue
 }
 
+if ($startVk) {
+    $vkToken = [System.Environment]::GetEnvironmentVariable("VK_BOT_TOKEN", "Process")
+    if ([string]::IsNullOrWhiteSpace($vkToken)) {
+        Write-Host "VK_BOT_TOKEN is empty -> skip VK bot startup."
+        Remove-Item -LiteralPath $vkBotPidFile -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "Starting VK bot..."
+        Start-ManagedProcess `
+            -Name "VkBot" `
+            -PythonPath $python `
+            -Arguments "-m apps.vk_bot.main" `
+            -WorkDir $repoRoot `
+            -PidFilePath $vkBotPidFile `
+            -StdoutLogPath $vkBotStdoutLog `
+            -StderrLogPath $vkBotStderrLog | Out-Null
+    }
+} else {
+    Write-Host "BOT_PLATFORM=$botPlatform -> skip VK bot startup."
+    Remove-Item -LiteralPath $vkBotPidFile -Force -ErrorAction SilentlyContinue
+}
 Write-Host ""
 Write-Host "Stack is ready."
 Write-Host "API docs: http://127.0.0.1:8000/docs"
@@ -399,6 +610,8 @@ Write-Host "Sheets PID: $sheetsPidFile"
 Write-Host "Sheets logs: $sheetsStdoutLog / $sheetsStderrLog"
 Write-Host "Bot PID: $botPidFile"
 Write-Host "Bot logs: $botStdoutLog / $botStderrLog"
+Write-Host "VK Bot PID: $vkBotPidFile"
+Write-Host "VK Bot logs: $vkBotStdoutLog / $vkBotStderrLog"
 $sheetId = [System.Environment]::GetEnvironmentVariable("GOOGLE_SHEETS_SPREADSHEET_ID", "Process")
 if (-not [string]::IsNullOrWhiteSpace($sheetId)) {
     Write-Host "Google Sheets: https://docs.google.com/spreadsheets/d/$sheetId/edit"

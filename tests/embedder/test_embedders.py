@@ -80,6 +80,30 @@ async def test_openai_one_call_returns_embedding(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_openai_one_call_truncates_embedding_to_configured_dim(monkeypatch):
+    embedder = _build_embedder(monkeypatch)
+    embedder.client.embeddings.create.return_value = SimpleNamespace(
+        data=[SimpleNamespace(embedding=[float(i) for i in range(8)])]
+    )
+
+    result = await embedder._one_call("hello")
+
+    assert result == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_openai_one_call_pads_short_embedding_to_configured_dim(monkeypatch):
+    embedder = _build_embedder(monkeypatch)
+    embedder.client.embeddings.create.return_value = SimpleNamespace(
+        data=[SimpleNamespace(embedding=[0.1, 0.2])]
+    )
+
+    result = await embedder._one_call("hello")
+
+    assert result == [0.1, 0.2, 0.0, 0.0, 0.0]
+
+
+@pytest.mark.asyncio
 async def test_openai_embed_returns_cached_values_without_generation(monkeypatch):
     embedder = _build_embedder(monkeypatch)
     embedder._cache.get = AsyncMock(side_effect=[[1.0] * 5, [2.0] * 5])

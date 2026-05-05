@@ -37,6 +37,22 @@ def _parse_json_list(value: Any) -> List[Any]:
     return []
 
 
+def _to_props_dict(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "items"):
+        try:
+            return dict(value.items())
+        except Exception:
+            pass
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
 def _entity_to_attrs(e: Entity) -> Dict[str, Any]:
     return {
         "id": str(e.id),
@@ -153,7 +169,7 @@ class MemgraphStorage(BaseGraphStorage):
                 {"id": node_id},
             )
             node = rows[0].get("n") if rows else None
-            result.append(_entity_from_row(dict(node)) if node else None)
+            result.append(_entity_from_row(_to_props_dict(node)) if node else None)
         return result
 
     async def upsert_nodes(self, nodes: Iterable[Entity]) -> None:
@@ -190,7 +206,7 @@ class MemgraphStorage(BaseGraphStorage):
             rel = rows[0].get("r")
             sid = rows[0].get("subject_id", subject_id)
             oid = rows[0].get("object_id", object_id)
-            result.append(_relation_from_row(dict(rel), str(sid), str(oid)) if rel else None)
+            result.append(_relation_from_row(_to_props_dict(rel), str(sid), str(oid)) if rel else None)
         return result
 
     async def upsert_edges(self, edges: List[Relation]) -> None:
@@ -263,7 +279,7 @@ class MemgraphStorage(BaseGraphStorage):
                     continue
                 rels.append(
                     _relation_from_row(
-                        dict(rel),
+                        _to_props_dict(rel),
                         str(row.get("subject_id", node_id)),
                         str(row.get("object_id", node_id)),
                     )
@@ -277,7 +293,7 @@ class MemgraphStorage(BaseGraphStorage):
         for row in rows:
             node = row.get("n")
             if node:
-                entities.append(_entity_from_row(dict(node)))
+                entities.append(_entity_from_row(_to_props_dict(node)))
         return entities
 
     async def get_all_edges(self) -> List[Relation]:
@@ -292,7 +308,7 @@ class MemgraphStorage(BaseGraphStorage):
                 continue
             relations.append(
                 _relation_from_row(
-                    dict(rel),
+                    _to_props_dict(rel),
                     str(row.get("subject_id", "")),
                     str(row.get("object_id", "")),
                 )

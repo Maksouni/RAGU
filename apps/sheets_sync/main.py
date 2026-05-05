@@ -21,10 +21,12 @@ def run_sheets_sync() -> None:
     logger.info("Sheets sync worker started interval=%ss", settings.sheets_sync_interval_sec)
 
     while True:
-        worker.sync_once()
+        try:
+            worker.sync_once()
+        except Exception:
+            logger.exception("Sheets sync loop iteration failed")
         time.sleep(settings.sheets_sync_interval_sec)
 
 
 if __name__ == "__main__":
     run_sheets_sync()
-

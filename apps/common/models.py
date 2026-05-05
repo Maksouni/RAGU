@@ -6,12 +6,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 AskMode = Literal["local", "global"]
+AnswerMode = Literal["auto", "llm", "no_llm"]
 
 
 class AskResult(BaseModel):
     question: str
     answer: str
     requested_mode: AskMode
+    answer_mode: AnswerMode = "auto"
     response_mode: str
     response_time_ms: int | None = None
 

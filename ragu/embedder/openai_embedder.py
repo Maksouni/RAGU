@@ -80,6 +80,15 @@ class OpenAIEmbedder(BaseEmbedder):
         self._use_cache = use_cache
         self._cache = EmbeddingCache(cache_path=cache_path, flush_every_n_writes=cache_flush_every)
 
+    def _fit_dimension(self, embedding: List[float] | None) -> List[float] | None:
+        if embedding is None:
+            return None
+        if len(embedding) == self.dim:
+            return embedding
+        if len(embedding) > self.dim:
+            return embedding[: self.dim]
+        return embedding + [0.0] * (self.dim - len(embedding))
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _one_call(self, text: str) -> List[float] | None:
         """
@@ -93,7 +102,7 @@ class OpenAIEmbedder(BaseEmbedder):
                 model=self.model_name,
                 input=text,
             )
-            return [item.embedding for item in response.data][0]
+            return self._fit_dimension([item.embedding for item in response.data][0])
         except Exception as e:
             logger.error(f"[OpenAI API Embedder] Exception occurred: {e}")
             raise
@@ -119,10 +128,10 @@ class OpenAIEmbedder(BaseEmbedder):
         # Check cache for all texts first
         for i, text in enumerate(texts):
             if self._cache is not None:
-                cache_key = make_embedding_cache_key(text, self.model_name)
+                cache_key = make_embedding_cache_key(text, f"{self.model_name}:dim={self.dim}")
                 cached = await self._cache.get(cache_key)
                 if cached is not None:
-                    results[i] = cached
+                    results[i] = self._fit_dimension(cached)
                 else:
                     pending.append(PendingEmbeddingRequest(i, text, cache_key))
             else:
@@ -142,6 +151,7 @@ class OpenAIEmbedder(BaseEmbedder):
 
                 for req, value in zip(batch, generated):
                     if not isinstance(value, Exception) and value is not None:
+                        value = self._fit_dimension(value)
                         if self._use_cache:
                             await self._cache.set(req.cache_key, value)
                         results[req.index] = value

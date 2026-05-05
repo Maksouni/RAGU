@@ -10,6 +10,7 @@ from apps.common.models import AskExchangeEvent, AskResult
 from apps.common.outbox import OutboxRepository
 from apps.common.routing import route_mode_and_question
 from apps.common.settings import IntegrationSettings
+from apps.orchestrator.intent_guard import INVALID_QUERY_MESSAGE, is_supported_package_query
 from apps.orchestrator.scenario_manager import ScenarioManager
 from apps.registry.repository import RegistryRepository
 from apps.scraper.service import PackageScraperService
@@ -46,15 +47,29 @@ class AskOrchestrator:
         correlation_id: str,
     ) -> AskResult:
         started_at = time.perf_counter()
-        routed = route_mode_and_question(raw_text, default_mode=self._settings.default_ask_mode)
+        routed = route_mode_and_question(
+            raw_text,
+            default_mode=self._settings.default_ask_mode,
+            default_answer_mode=self._settings.default_answer_mode,
+        )
         if not routed.question:
             raise ValueError("Question is empty after mode parsing.")
+        if not is_supported_package_query(routed.question):
+            response_time_ms = int((time.perf_counter() - started_at) * 1000)
+            return AskResult(
+                question=routed.question,
+                answer=INVALID_QUERY_MESSAGE,
+                requested_mode=routed.mode,
+                answer_mode=routed.answer_mode,
+                response_mode="invalid_query",
+                response_time_ms=response_time_ms,
+            )
 
         answer = ""
         response_mode = "unknown"
         response_metadata: dict[str, object] = {}
 
-        if not routed.mode_explicit:
+        if not routed.mode_explicit and not routed.answer_mode_explicit:
             cached = self._outbox.find_recent_answer(routed.question)
             if cached:
                 answer = cached.answer
@@ -69,6 +84,7 @@ class AskOrchestrator:
             scenario_result = await self._scenario_manager.handle_if_supported(
                 routed.question,
                 requested_mode=effective_mode,
+                answer_mode=routed.answer_mode,
             )
             if scenario_result.handled:
                 answer = scenario_result.answer
@@ -76,13 +92,36 @@ class AskOrchestrator:
                 response_metadata = {
                     **scenario_result.metadata,
                     "cache_hit": False,
+                    "answer_mode": routed.answer_mode,
                 }
+                if routed.answer_mode == "llm":
+                    try:
+                        beautified = await self._api_client.beautify_answer(
+                            routed.question,
+                            scenario_result.answer,
+                        )
+                        llm_answer = str(beautified.get("answer", "")).strip()
+                        if llm_answer:
+                            answer = llm_answer
+                            response_mode = f"registry_scrape_llm_{effective_mode}"
+                            response_metadata["llm_formatter"] = True
+                    except Exception as exc:
+                        logger.exception("LLM answer formatter failed, returning structured answer")
+                        response_metadata["llm_formatter"] = False
+                        response_metadata["llm_formatter_error"] = str(exc)[:300]
             else:
                 logger.info("Dispatching ask request to mode=%s", effective_mode)
-                response_payload = await self._api_client.ask(routed.question, mode=effective_mode)
+                response_payload = await self._api_client.ask(
+                    routed.question,
+                    mode=effective_mode,
+                    answer_mode=routed.answer_mode,
+                )
                 answer = str(response_payload.get("answer", "")).strip()
                 response_mode = str(response_payload.get("mode", "unknown"))
-                response_metadata = {"cache_hit": False}
+                response_metadata = {
+                    "cache_hit": False,
+                    "answer_mode": response_payload.get("answer_mode", routed.answer_mode),
+                }
         if not answer:
             raise ApiClientError("Ask API returned empty answer.")
         response_time_ms = int((time.perf_counter() - started_at) * 1000)
@@ -101,6 +140,8 @@ class AskOrchestrator:
                 "requested_mode": routed.mode,
                 "effective_mode": effective_mode,
                 "mode_explicit": routed.mode_explicit,
+                "requested_answer_mode": routed.answer_mode,
+                "answer_mode_explicit": routed.answer_mode_explicit,
                 "response_mode": response_mode,
                 **response_metadata,
             },
@@ -112,6 +153,7 @@ class AskOrchestrator:
             question=routed.question,
             answer=answer,
             requested_mode=routed.mode,
+            answer_mode=routed.answer_mode,
             response_mode=response_mode,
             response_time_ms=response_time_ms,
         )

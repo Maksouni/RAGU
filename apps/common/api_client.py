@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from apps.common.settings import AskMode, IntegrationSettings
+from apps.common.settings import AnswerMode, AskMode, IntegrationSettings
 
 
 class ApiClientError(RuntimeError):
@@ -16,10 +16,10 @@ class RaguApiClient:
         self._settings = settings
         self._client = httpx.AsyncClient(base_url=settings.api_base_url.rstrip("/"), timeout=None)
 
-    async def ask(self, question: str, mode: AskMode) -> dict[str, Any]:
+    async def ask(self, question: str, mode: AskMode, answer_mode: AnswerMode = "auto") -> dict[str, Any]:
         response = await self._client.post(
             f"/ask/{mode}",
-            json={"question": question},
+            json={"question": question, "answer_mode": answer_mode},
             timeout=self._settings.ask_timeout_sec,
         )
         if response.status_code >= 400:
@@ -33,6 +33,15 @@ class RaguApiClient:
             timeout=self._settings.ingest_timeout_sec,
         )
 
+    async def beautify_answer(self, question: str, structured_answer: str) -> dict[str, Any]:
+        response = await self._client.post(
+            "/answer/llm",
+            json={"question": question, "structured_answer": structured_answer},
+            timeout=self._settings.ask_timeout_sec,
+        )
+        if response.status_code >= 400:
+            raise ApiClientError(f"/answer/llm failed with {response.status_code}: {response.text}")
+        return response.json()
+
     async def aclose(self) -> None:
         await self._client.aclose()
-

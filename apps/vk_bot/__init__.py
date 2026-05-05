@@ -1,0 +1,1 @@
+"""VK bot entrypoint package."""

@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from apps.common.api_client import ApiClientError, RaguApiClient
+from apps.common.bot_messages import EMPTY_QUERY_MESSAGE, INIT_MESSAGE, START_MESSAGE, TEMP_ERROR_MESSAGE
 from apps.common.context import correlation_scope
 from apps.common.logging import configure_logging
 from apps.common.outbox import OutboxRepository
@@ -24,31 +25,14 @@ _orchestrator: AskOrchestrator | None = None
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
-    await message.answer(
-        "Привет! Я ищу пакеты по источникам (registry + scraper), а не только через LLM.\n\n"
-        "Как использовать:\n"
-        "- Просто пиши запрос без /local и /global.\n"
-        "- Если похожий запрос уже был, сначала верну ответ из кэша.\n"
-        "- Если данных нет, автоматически пойду в local-поиск.\n"
-        "- Команды /local и /global можно использовать вручную.\n\n"
-        "Примеры:\n"
-        "- дай список всех версий PostgreSQL для debian 13\n"
-        "- дай список всех пакетов PostgreSQL 17.6\n"
-        "- Python 3.12 для Ubuntu limit=10\n\n"
-        "Фильтры:\n"
-        "- format=deb|rpm|apk|exe\n"
-        "- source=<часть имени источника>\n"
-        "- sort=newest|oldest|name\n"
-        "- limit=10\n"
-        "- show=5"
-    )
+    await message.answer(START_MESSAGE)
 
 
 @router.message()
 async def on_text_message(message: Message) -> None:
     global _orchestrator
     if _orchestrator is None:
-        await message.answer("Бот еще инициализируется, попробуйте снова через несколько секунд.")
+        await message.answer(INIT_MESSAGE)
         return
 
     text = message.text or ""
@@ -65,7 +49,7 @@ async def on_text_message(message: Message) -> None:
                 correlation_id=correlation_id,
             )
         except ValueError:
-            await message.answer("Пустой запрос. Добавьте текст вопроса.")
+            await message.answer(EMPTY_QUERY_MESSAGE)
             return
         except ApiClientError as exc:
             logger.exception("API error while handling telegram message")
@@ -73,7 +57,7 @@ async def on_text_message(message: Message) -> None:
             return
         except Exception:
             logger.exception("Unexpected bot handler error")
-            await message.answer("Временная ошибка обработки запроса. Попробуйте снова.")
+            await message.answer(TEMP_ERROR_MESSAGE)
             return
 
         await message.answer(truncate_for_telegram(result.answer))

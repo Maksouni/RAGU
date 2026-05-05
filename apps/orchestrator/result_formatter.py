@@ -50,22 +50,44 @@ def _sort_items(query: ScenarioQuery, items: list[PackageArtifact]) -> list[Pack
     return sorted(items, key=key_fn, reverse=reverse)
 
 
-def format_scenario_answer(query: ScenarioQuery, artifacts: list[PackageArtifact], max_lines: int = 60) -> str:
+def _style_label(answer_mode: str) -> str:
+    return (
+        "LLM режим: структурированный ответ по данным registry/scraper"
+        if answer_mode == "llm"
+        else "NO-LLM шаблонный ответ"
+    )
+
+
+def format_scenario_answer(
+    query: ScenarioQuery,
+    artifacts: list[PackageArtifact],
+    max_lines: int = 60,
+    answer_mode: str = "no_llm",
+) -> str:
     items = _sort_items(query, _apply_filters(query, artifacts))
+    label = _style_label(answer_mode)
     if query.limit:
         items = items[: query.limit]
     if not items:
-        return "По заданному сценарию пакеты не найдены в доступных источниках."
+        return (
+            f"{label}\n"
+            "Статус: по заданному сценарию пакеты не найдены в доступных источниках.\n"
+            f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, "
+            f"sort={query.sort_by}, limit={query.limit}, show={query.show}"
+        )
 
     if query.scenario_type == "versions_by_os":
         by_version = defaultdict(list)
         for item in items:
             by_version[item.package_version].append(item)
-        versions = sorted(by_version.keys(), reverse=True)
+        versions = sorted(by_version.keys(), key=_version_key, reverse=query.sort_by != "oldest")
         lines = [
-            f"Найдено версий: {len(versions)} (пакетов: {len(items)}).",
-            f"Сценарий: версии {query.product} для {query.os} {query.os_version}.",
+            label,
+            f"Сценарий: версии {query.product} для {query.os} {query.os_version or '*'}",
+            f"Найдено версий: {len(versions)}; пакетов: {len(items)}",
             f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, sort={query.sort_by}, limit={query.limit}, show={query.show}",
+            "",
+            "Результаты:",
         ]
         for version in versions:
             examples = by_version[version][: query.show]
@@ -82,9 +104,13 @@ def format_scenario_answer(query: ScenarioQuery, artifacts: list[PackageArtifact
         by_format[item.package_format].append(item)
     formats = sorted(by_format.keys())
     lines = [
-        f"Форматы для {query.product} {query.package_version}: {', '.join(formats)}",
+        label,
+        f"Сценарий: пакеты {query.product} {query.package_version or '*'}",
+        f"Форматы: {', '.join(formats)}",
         f"Найдено пакетов: {len(items)}",
         f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, sort={query.sort_by}, limit={query.limit}, show={query.show}",
+        "",
+        "Результаты:",
     ]
     for fmt in formats:
         lines.append(f"- {fmt}: {len(by_format[fmt])} пакетов")

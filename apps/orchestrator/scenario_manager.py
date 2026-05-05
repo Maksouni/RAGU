@@ -24,7 +24,12 @@ class ScenarioManager:
         self._registry = registry
         self._scraper = scraper
 
-    async def handle_if_supported(self, question: str, requested_mode: str) -> ScenarioResult:
+    async def handle_if_supported(
+        self,
+        question: str,
+        requested_mode: str,
+        answer_mode: str = "no_llm",
+    ) -> ScenarioResult:
         scenario_query = parse_scenario_query(question)
         if not scenario_query:
             return ScenarioResult(handled=False)
@@ -59,7 +64,7 @@ class ScenarioManager:
             )
             all_artifacts.extend(artifacts)
 
-        answer = format_scenario_answer(scenario_query, all_artifacts)
+        answer = format_scenario_answer(scenario_query, all_artifacts, answer_mode=answer_mode)
         return ScenarioResult(
             handled=True,
             answer=answer,

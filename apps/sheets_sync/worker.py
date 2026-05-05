@@ -4,6 +4,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,7 @@ class GoogleSheetsBackend:
                 "timestamp_nsk",
                 "response_time_ms",
                 "response_mode",
+                "answer_mode",
                 "cache_hit",
             ],
             "queries": ["event_id", "timestamp", "user_id", "chat_id", "mode", "question", "correlation_id"],
@@ -58,8 +60,11 @@ class GoogleSheetsBackend:
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
         ]
+        credentials_path = self.settings.google_service_account_json_path
+        if not credentials_path:
+            raise FileNotFoundError("GOOGLE_SERVICE_ACCOUNT_JSON_PATH is empty")
         credentials = Credentials.from_service_account_file(
-            self.settings.google_service_account_json_path,
+            credentials_path,
             scopes=scopes,
         )
         self._client = gspread.authorize(credentials)
@@ -90,7 +95,28 @@ class GoogleSheetsBackend:
         expected_header = self._headers[worksheet_name]
         if current_header != expected_header:
             worksheet.update(f"A1:{chr(64 + len(expected_header))}1", [expected_header])
+        self._compact_blank_rows(worksheet, worksheet_name)
         return worksheet
+
+    def _compact_blank_rows(self, worksheet: Any, worksheet_name: str) -> None:
+        values = worksheet.get_all_values()
+        if not values:
+            return
+        headers = self._headers[worksheet_name]
+        data_rows = values[1:]
+        non_empty_rows = [row for row in data_rows if any(str(cell).strip() for cell in row)]
+        if len(non_empty_rows) == len(data_rows):
+            return
+
+        normalized_rows = []
+        for row in non_empty_rows:
+            normalized_rows.append((row + [""] * len(headers))[: len(headers)])
+
+        worksheet.clear()
+        worksheet.update(
+            f"A1:{chr(64 + len(headers))}{len(normalized_rows) + 1}",
+            [headers] + normalized_rows,
+        )
 
     def _sheet_to_dict_rows(self, rows: Iterable[list[str]]) -> list[dict[str, str]]:
         rows = list(rows)
@@ -140,20 +166,31 @@ class SheetsSyncWorker:
         self._batch_size = batch_size
 
     def _write_error(self, event_id: str, stage: str, error: str) -> None:
-        self._backend.append_error(
-            {
-                "event_id": event_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "stage": stage,
-                "error": error[:1000],
-            }
-        )
+        try:
+            self._backend.append_error(
+                {
+                    "event_id": event_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "stage": stage,
+                    "error": error[:1000],
+                }
+            )
+        except Exception:
+            logger.exception("Unable to write sheets error audit event_id=%s", event_id)
 
     def sync_once(self) -> int:
         if not self._settings.sheets_sync_enabled:
             return 0
         if not self._settings.google_sheets_spreadsheet_id or not self._settings.google_service_account_json_path:
             logger.warning("Sheets sync is enabled, but Google config is missing. Skipping.")
+            return 0
+        if isinstance(self._backend, GoogleSheetsBackend) and not Path(
+            self._settings.google_service_account_json_path
+        ).expanduser().exists():
+            logger.warning(
+                "Sheets sync is enabled, but credentials file is missing: %s",
+                self._settings.google_service_account_json_path,
+            )
             return 0
 
         records = self._outbox.fetch_pending_sheets_sync(limit=self._batch_size)
@@ -173,6 +210,7 @@ class SheetsSyncWorker:
                 nsk_timestamp = event.timestamp.astimezone(NSK_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
                 response_time_ms = event.metadata.get("response_time_ms", "")
                 response_mode = event.metadata.get("response_mode", "")
+                answer_mode = event.metadata.get("answer_mode", event.metadata.get("requested_answer_mode", ""))
                 cache_hit = event.metadata.get("cache_hit", "")
                 self._backend.upsert(
                     "overview",
@@ -185,6 +223,7 @@ class SheetsSyncWorker:
                         "timestamp_nsk": nsk_timestamp,
                         "response_time_ms": response_time_ms,
                         "response_mode": response_mode,
+                        "answer_mode": answer_mode,
                         "cache_hit": cache_hit,
                     },
                 )
