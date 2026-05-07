@@ -30,7 +30,19 @@ _PACKAGES_BY_VERSION_RE = re.compile(
     r"(?P<version>\d+(?:\.\d+)+)",
     re.IGNORECASE,
 )
+_PRODUCT_FOR_OS_RE = re.compile(
+    r"(?P<product>[a-zA-Z0-9+_.-][a-zA-Z0-9+_.\-\s]{1,80}?)\s+"
+    r"(?:для|for|РґР»СЏ)\s+"
+    r"(?P<os>[^\s=]+)"
+    r"(?:\s+(?P<osv>[0-9][0-9.]*))?",
+    re.IGNORECASE,
+)
 _ANY_VERSION_RE = re.compile(r"(?P<version>\d+(?:\.\d+)+)")
+_LEADING_REQUEST_WORDS_RE = re.compile(
+    r"^(?:дай|дайте|мне|найди|найдите|покажи|покажите|скачай|скачать|"
+    r"give|me|find|show|get|РґР°Р№|РґР°Р№С‚Рµ|РјРЅРµ|РЅР°Р№РґРё|РїРѕРєР°Р¶Рё)\s+",
+    re.IGNORECASE,
+)
 
 
 class ScenarioQuery(BaseModel):
@@ -62,6 +74,8 @@ def _normalize_os(value: str | None) -> str | None:
         "убунту": "ubuntu",
         "debian": "debian",
         "дебиан": "debian",
+        "android": "android",
+        "андроид": "android",
         "windows": "windows",
         "виндовс": "windows",
         "win": "windows",
@@ -130,6 +144,17 @@ def _parse_product(raw: str, params: dict[str, str]) -> str:
     return token_match.group(1) if token_match else "postgresql"
 
 
+def _clean_product(value: str) -> str:
+    cleaned = re.sub(r"\b[a-z_]+\s*=\s*[a-z0-9._-]+\b", " ", value, flags=re.IGNORECASE)
+    cleaned = " ".join(cleaned.strip().split())
+    while True:
+        updated = _LEADING_REQUEST_WORDS_RE.sub("", cleaned).strip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned.lower()
+
+
 def parse_scenario_query(text: str) -> ScenarioQuery | None:
     raw = (text or "").strip()
     if not raw:
@@ -191,6 +216,23 @@ def parse_scenario_query(text: str) -> ScenarioQuery | None:
             show=show,
             raw_query=raw,
         )
+
+    m_product_os = _PRODUCT_FOR_OS_RE.search(raw)
+    if m_product_os and package_format:
+        product_by_os = _clean_product(m_product_os.group("product"))
+        if product_by_os:
+            return ScenarioQuery(
+                scenario_type="formats_by_version",
+                product=product_by_os,
+                os=_normalize_os(m_product_os.group("os")),
+                os_version=m_product_os.group("osv"),
+                package_format=package_format,
+                source_name=source_name,
+                sort_by=sort_by,
+                limit=limit,
+                show=show,
+                raw_query=raw,
+            )
 
     any_version = _ANY_VERSION_RE.search(raw)
     if any_version:

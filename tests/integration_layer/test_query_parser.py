@@ -38,3 +38,12 @@ def test_parse_with_filters_and_sort() -> None:
     assert q.sort_by == "oldest"
     assert q.limit == 12
     assert q.show == 9
+
+
+def test_parse_android_apk_request_without_version() -> None:
+    q = parse_scenario_query("дай мне Geometry Dash Lite для Android format=apk")
+    assert q is not None
+    assert q.scenario_type == "formats_by_version"
+    assert q.product == "geometry dash lite"
+    assert q.os == "android"
+    assert q.package_format == "apk"

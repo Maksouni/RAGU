@@ -181,11 +181,99 @@ function Stop-ProcessByPidFile {
     if ($oldPidRaw -match '^\d+$') {
         $oldProc = Get-Process -Id ([int]$oldPidRaw) -ErrorAction SilentlyContinue
         if ($oldProc) {
-            Write-Host "Stopping old $Name process PID=$oldPidRaw ..."
-            Stop-Process -Id ([int]$oldPidRaw) -Force
+            if (Test-ManagedProjectProcess -ProcessId ([int]$oldPidRaw)) {
+                try {
+                    Write-Host "Stopping old $Name process PID=$oldPidRaw ..."
+                    Stop-Process -Id ([int]$oldPidRaw) -Force -ErrorAction Stop
+                } catch {
+                    Write-Host "Could not stop old $Name PID=${oldPidRaw}: $($_.Exception.Message)"
+                }
+            } else {
+                Write-Host "$Name PID file is stale: PID=$oldPidRaw belongs to '$($oldProc.ProcessName)'. Removing PID file without stopping it."
+            }
         }
     }
     Remove-Item -LiteralPath $PidFilePath -Force -ErrorAction SilentlyContinue
+}
+
+function Test-ManagedProjectProcess {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    try {
+        $procInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if (-not $procInfo) {
+        return $false
+    }
+
+    $processName = ($procInfo.Name + "").ToLowerInvariant()
+    if ($processName -notin @("python.exe", "pythonw.exe", "py.exe")) {
+        return $false
+    }
+
+    $commandLine = ($procInfo.CommandLine + "").ToLowerInvariant()
+    $executablePath = ($procInfo.ExecutablePath + "").ToLowerInvariant()
+    $repo = ($script:repoRoot + "").ToLowerInvariant()
+    $venvDir = ""
+    if (-not [string]::IsNullOrWhiteSpace($repo)) {
+        $venvDir = (Join-Path $repo "venv").ToLowerInvariant()
+    }
+
+    return (
+        (-not [string]::IsNullOrWhiteSpace($repo) -and $commandLine.Contains($repo)) -or
+        (-not [string]::IsNullOrWhiteSpace($venvDir) -and $executablePath.Contains($venvDir))
+    )
+}
+
+function Stop-ManagedProjectProcessesByCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkDir
+    )
+
+    $needle = $Arguments.ToLowerInvariant()
+    $work = $WorkDir.ToLowerInvariant()
+    $currentPid = $PID
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $processName = ($_.Name + "").ToLowerInvariant()
+        $commandLine = ($_.CommandLine + "").ToLowerInvariant()
+        $processId = [int]$_.ProcessId
+        $processId -ne $currentPid -and
+            $processName -in @("python.exe", "pythonw.exe", "py.exe") -and
+            $commandLine.Contains($work) -and
+            $commandLine.Contains($needle)
+    })
+
+    foreach ($procInfo in $processes) {
+        try {
+            Write-Host "Stopping orphan $Name process PID=$($procInfo.ProcessId) ..."
+            Stop-Process -Id ([int]$procInfo.ProcessId) -Force -ErrorAction Stop
+        } catch {
+            Write-Host "Could not stop orphan $Name PID=$($procInfo.ProcessId): $($_.Exception.Message)"
+        }
+    }
+
+    if (@($processes).Count -gt 0) {
+        Start-Sleep -Seconds 1
+    }
+}
+
+function Remove-LogFileIfPossible {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    try {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    } catch {
+        Write-Host "Could not remove old $Name log '$Path': $($_.Exception.Message)"
+        throw
+    }
 }
 
 function Start-ManagedProcess {
@@ -200,8 +288,9 @@ function Start-ManagedProcess {
     )
 
     Stop-ProcessByPidFile -PidFilePath $PidFilePath -Name $Name
-    if (Test-Path -LiteralPath $StdoutLogPath) { Remove-Item -LiteralPath $StdoutLogPath -Force }
-    if (Test-Path -LiteralPath $StderrLogPath) { Remove-Item -LiteralPath $StderrLogPath -Force }
+    Stop-ManagedProjectProcessesByCommand -Name $Name -Arguments $Arguments -WorkDir $WorkDir
+    Remove-LogFileIfPossible -Path $StdoutLogPath -Name $Name
+    Remove-LogFileIfPossible -Path $StderrLogPath -Name $Name
 
     $proc = Start-Process -FilePath $PythonPath `
         -ArgumentList $Arguments `

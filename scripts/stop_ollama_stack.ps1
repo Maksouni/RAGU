@@ -79,6 +79,36 @@ function Get-ChildProcessIds {
     }
 }
 
+function Test-ManagedProjectProcess {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    try {
+        $procInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if (-not $procInfo) {
+        return $false
+    }
+
+    $processName = ($procInfo.Name + "").ToLowerInvariant()
+    if ($processName -notin @("python.exe", "pythonw.exe", "py.exe")) {
+        return $false
+    }
+
+    $commandLine = ($procInfo.CommandLine + "").ToLowerInvariant()
+    $executablePath = ($procInfo.ExecutablePath + "").ToLowerInvariant()
+    $repo = ($script:repoRoot + "").ToLowerInvariant()
+    $venvDir = ""
+    if (-not [string]::IsNullOrWhiteSpace($repo)) {
+        $venvDir = (Join-Path $repo "venv").ToLowerInvariant()
+    }
+
+    return (
+        (-not [string]::IsNullOrWhiteSpace($repo) -and $commandLine.Contains($repo)) -or
+        (-not [string]::IsNullOrWhiteSpace($venvDir) -and $executablePath.Contains($venvDir))
+    )
+}
+
 function Stop-ProcessTreeByPidFile {
     param(
         [Parameter(Mandatory = $true)][string]$PidFilePath,
@@ -92,6 +122,12 @@ function Stop-ProcessTreeByPidFile {
     $pidRaw = Get-Content -LiteralPath $PidFilePath -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pidRaw -match '^\d+$') {
         $rootPid = [int]$pidRaw
+        $rootProc = Get-Process -Id $rootPid -ErrorAction SilentlyContinue
+        if ($rootProc -and -not (Test-ManagedProjectProcess -ProcessId $rootPid)) {
+            Write-Host "$Name PID file is stale: PID=$rootPid belongs to '$($rootProc.ProcessName)'. Removing PID file without stopping it."
+            Remove-Item -LiteralPath $PidFilePath -Force -ErrorAction SilentlyContinue
+            return
+        }
         $processIds = @(Get-ChildProcessIds -ParentPid $rootPid) + @($rootPid)
         foreach ($processId in ($processIds | Select-Object -Unique | Sort-Object -Descending)) {
             $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue

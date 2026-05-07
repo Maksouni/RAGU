@@ -35,8 +35,4 @@ def is_supported_package_query(text: str) -> bool:
         return False
     if parse_scenario_query(value) is not None:
         return True
-    if _FILTER_TOKEN_RE.search(value):
-        return True
-    if _DOMAIN_TOKEN_RE.search(value):
-        return True
     return bool(_VERSION_RE.search(value) and re.search(r"\b[a-zA-Z][a-zA-Z0-9+_.-]{1,30}\b", value))

@@ -19,6 +19,18 @@ class ScenarioResult(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+def _format_unsupported_sources_answer(question: str, product: str, os_name: str | None, package_format: str | None) -> str:
+    return (
+        "Источник данных не настроен для этого запроса.\n\n"
+        f"Запрос: {question}\n"
+        f"Распознано: product={product}, os={os_name or '*'}, format={package_format or '*'}.\n\n"
+        "Сейчас в демо настроены источники для PostgreSQL/Python и форматов deb/rpm/apk/exe "
+        "в серверных репозиториях Debian, Ubuntu, RHEL, Alpine и python.org.\n"
+        "Android APK-источники вроде Google Play или сторонних APK-каталогов не подключены, "
+        "поэтому я не буду подбирать похожие старые ответы из графа."
+    )
+
+
 class ScenarioManager:
     def __init__(self, registry: RegistryRepository, scraper: PackageScraperService) -> None:
         self._registry = registry
@@ -54,6 +66,28 @@ class ScenarioManager:
                 templates = [t for t in templates if (t.os_version or "").lower() in {osv, "*", ""}]
             if scenario_query.package_format:
                 templates = [t for t in templates if t.package_format == scenario_query.package_format]
+
+        if not templates:
+            return ScenarioResult(
+                handled=True,
+                answer=_format_unsupported_sources_answer(
+                    scenario_query.raw_query,
+                    scenario_query.product,
+                    scenario_query.os,
+                    scenario_query.package_format,
+                ),
+                metadata={
+                    "scenario_type": scenario_query.scenario_type,
+                    "templates_used": [],
+                    "artifacts_count": 0,
+                    "product": scenario_query.product,
+                    "os": scenario_query.os,
+                    "os_version": scenario_query.os_version,
+                    "package_version": scenario_query.package_version,
+                    "requested_mode": requested_mode,
+                    "unsupported_sources": True,
+                },
+            )
 
         all_artifacts: list[PackageArtifact] = []
         for template in templates:

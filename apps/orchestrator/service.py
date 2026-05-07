@@ -94,7 +94,8 @@ class AskOrchestrator:
                     "cache_hit": False,
                     "answer_mode": routed.answer_mode,
                 }
-                if routed.answer_mode == "llm":
+                artifacts_count = int(scenario_result.metadata.get("artifacts_count") or 0)
+                if routed.answer_mode == "llm" and artifacts_count > 0:
                     try:
                         beautified = await self._api_client.beautify_answer(
                             routed.question,
@@ -126,6 +127,16 @@ class AskOrchestrator:
             raise ApiClientError("Ask API returned empty answer.")
         response_time_ms = int((time.perf_counter() - started_at) * 1000)
         response_metadata["response_time_ms"] = response_time_ms
+
+        if response_metadata.get("unsupported_sources"):
+            return AskResult(
+                question=routed.question,
+                answer=answer,
+                requested_mode=routed.mode,
+                answer_mode=routed.answer_mode,
+                response_mode=response_mode,
+                response_time_ms=response_time_ms,
+            )
 
         event = AskExchangeEvent(
             event_id=self._build_event_id(chat_id, user_id, effective_mode, routed.question, answer, correlation_id),
