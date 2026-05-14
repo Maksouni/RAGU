@@ -141,7 +141,7 @@ async def _handle_message(
     if not peer_id:
         return
 
-    if text.lower() in {"/start", "start", "начать"}:
+    if text.lower() in {"/start", "start", "/help", "help", "помощь", "начать"}:
         await vk_api.send_message(peer_id, START_MESSAGE)
         return
 

@@ -261,6 +261,14 @@ class SheetsSyncWorker:
                         "attempts": record.attempts,
                     },
                 )
+                source_errors = event.metadata.get("source_errors")
+                if isinstance(source_errors, dict):
+                    for source_name, error in source_errors.items():
+                        self._write_error(
+                            event.event_id,
+                            f"source_fetch:{source_name}",
+                            str(error),
+                        )
                 self._outbox.mark_sheets_synced(event.event_id)
                 synced += 1
             except Exception as exc:

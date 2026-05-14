@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -10,12 +11,36 @@ from apps.common.models import AskExchangeEvent, AskResult
 from apps.common.outbox import OutboxRepository
 from apps.common.routing import route_mode_and_question
 from apps.common.settings import IntegrationSettings
-from apps.orchestrator.intent_guard import INVALID_QUERY_MESSAGE, is_supported_package_query
+from apps.orchestrator.intent_guard import (
+    INVALID_QUERY_MESSAGE,
+    is_supported_general_it_query,
+    is_supported_package_query,
+)
 from apps.orchestrator.scenario_manager import ScenarioManager
 from apps.registry.repository import RegistryRepository
 from apps.scraper.service import PackageScraperService
 
 logger = logging.getLogger(__name__)
+
+
+def _default_answer_mode_from_env() -> str:
+    raw = os.getenv("DISABLE_LLM_ANSWERS", "false").strip().lower()
+    return "no_llm" if raw in {"1", "true", "yes", "on"} else "llm"
+
+
+def _is_no_reliable_context_answer(answer: str) -> bool:
+    return "не найдено достаточно релевантной" in answer.lower()
+
+
+def _format_cached_no_llm_answer(cached: AskExchangeEvent) -> str:
+    return "\n".join(
+        [
+            "NO-LLM ответ из сохраненной базы",
+            f"Генерация LLM: выключена; поиск: exact_outbox:{cached.event_id}.",
+            "",
+            cached.answer,
+        ]
+    )
 
 
 class AskOrchestrator:
@@ -52,15 +77,20 @@ class AskOrchestrator:
             default_mode=self._settings.default_ask_mode,
             default_answer_mode=self._settings.default_answer_mode,
         )
+        effective_answer_mode = (
+            _default_answer_mode_from_env() if routed.answer_mode == "auto" else routed.answer_mode
+        )
         if not routed.question:
             raise ValueError("Question is empty after mode parsing.")
-        if not is_supported_package_query(routed.question):
+        is_package_query = is_supported_package_query(routed.question)
+        is_general_it_query = is_supported_general_it_query(routed.question)
+        if not is_package_query and not is_general_it_query:
             response_time_ms = int((time.perf_counter() - started_at) * 1000)
             return AskResult(
                 question=routed.question,
                 answer=INVALID_QUERY_MESSAGE,
                 requested_mode=routed.mode,
-                answer_mode=routed.answer_mode,
+                answer_mode=effective_answer_mode,
                 response_mode="invalid_query",
                 response_time_ms=response_time_ms,
             )
@@ -80,11 +110,11 @@ class AskOrchestrator:
                 }
 
         effective_mode = routed.mode if routed.mode_explicit else "local"
-        if not answer:
+        if not answer and is_package_query:
             scenario_result = await self._scenario_manager.handle_if_supported(
                 routed.question,
                 requested_mode=effective_mode,
-                answer_mode=routed.answer_mode,
+                answer_mode=effective_answer_mode,
             )
             if scenario_result.handled:
                 answer = scenario_result.answer
@@ -92,10 +122,11 @@ class AskOrchestrator:
                 response_metadata = {
                     **scenario_result.metadata,
                     "cache_hit": False,
-                    "answer_mode": routed.answer_mode,
+                    "answer_mode": effective_answer_mode,
+                    "requested_answer_mode": routed.answer_mode,
                 }
                 artifacts_count = int(scenario_result.metadata.get("artifacts_count") or 0)
-                if routed.answer_mode == "llm" and artifacts_count > 0:
+                if effective_answer_mode == "llm" and artifacts_count > 0:
                     try:
                         beautified = await self._api_client.beautify_answer(
                             routed.question,
@@ -110,19 +141,32 @@ class AskOrchestrator:
                         logger.exception("LLM answer formatter failed, returning structured answer")
                         response_metadata["llm_formatter"] = False
                         response_metadata["llm_formatter_error"] = str(exc)[:300]
-            else:
-                logger.info("Dispatching ask request to mode=%s", effective_mode)
-                response_payload = await self._api_client.ask(
-                    routed.question,
-                    mode=effective_mode,
-                    answer_mode=routed.answer_mode,
-                )
-                answer = str(response_payload.get("answer", "")).strip()
-                response_mode = str(response_payload.get("mode", "unknown"))
-                response_metadata = {
-                    "cache_hit": False,
-                    "answer_mode": response_payload.get("answer_mode", routed.answer_mode),
-                }
+        if not answer:
+            logger.info("Dispatching ask request to mode=%s", effective_mode)
+            response_payload = await self._api_client.ask(
+                routed.question,
+                mode=effective_mode,
+                answer_mode=effective_answer_mode,
+            )
+            answer = str(response_payload.get("answer", "")).strip()
+            response_mode = str(response_payload.get("mode", "unknown"))
+            response_metadata = {
+                "cache_hit": False,
+                "answer_mode": response_payload.get("answer_mode", effective_answer_mode),
+                "requested_answer_mode": routed.answer_mode,
+                "query_kind": "general_it" if is_general_it_query else "package_fallback",
+            }
+            if (
+                effective_answer_mode == "no_llm"
+                and is_general_it_query
+                and _is_no_reliable_context_answer(answer)
+            ):
+                cached = self._outbox.find_recent_answer(routed.question)
+                if cached:
+                    answer = _format_cached_no_llm_answer(cached)
+                    response_mode = "local_cache_no_llm"
+                    response_metadata["cache_hit"] = True
+                    response_metadata["cache_source_event_id"] = cached.event_id
         if not answer:
             raise ApiClientError("Ask API returned empty answer.")
         response_time_ms = int((time.perf_counter() - started_at) * 1000)
@@ -133,7 +177,7 @@ class AskOrchestrator:
                 question=routed.question,
                 answer=answer,
                 requested_mode=routed.mode,
-                answer_mode=routed.answer_mode,
+                answer_mode=effective_answer_mode,
                 response_mode=response_mode,
                 response_time_ms=response_time_ms,
             )
@@ -152,6 +196,7 @@ class AskOrchestrator:
                 "effective_mode": effective_mode,
                 "mode_explicit": routed.mode_explicit,
                 "requested_answer_mode": routed.answer_mode,
+                "effective_answer_mode": effective_answer_mode,
                 "answer_mode_explicit": routed.answer_mode_explicit,
                 "response_mode": response_mode,
                 **response_metadata,
@@ -164,7 +209,7 @@ class AskOrchestrator:
             question=routed.question,
             answer=answer,
             requested_mode=routed.mode,
-            answer_mode=routed.answer_mode,
+            answer_mode=effective_answer_mode,
             response_mode=response_mode,
             response_time_ms=response_time_ms,
         )

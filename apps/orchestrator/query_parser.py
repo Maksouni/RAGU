@@ -38,9 +38,23 @@ _PRODUCT_FOR_OS_RE = re.compile(
     re.IGNORECASE,
 )
 _ANY_VERSION_RE = re.compile(r"(?P<version>\d+(?:\.\d+)+)")
+_VERSION_HINT_RE = re.compile(r"\b(верс\w*|version|versions)\b", re.IGNORECASE)
 _LEADING_REQUEST_WORDS_RE = re.compile(
-    r"^(?:дай|дайте|мне|найди|найдите|покажи|покажите|скачай|скачать|"
-    r"give|me|find|show|get|РґР°Р№|РґР°Р№С‚Рµ|РјРЅРµ|РЅР°Р№РґРё|РїРѕРєР°Р¶Рё)\s+",
+    r"^(?:дай|дайте|мне|найди|найдите|покажи|покажите|скачай|скачать|нужен|нужна|нужно|"
+    r"список|все|всех|дай список|"
+    r"give|me|find|show|get|need|list|download|РґР°Р№|РґР°Р№С‚Рµ|РјРЅРµ|РЅР°Р№РґРё|РїРѕРєР°Р¶Рё)\s+",
+    re.IGNORECASE,
+)
+_OS_PHRASE_RE = re.compile(
+    r"(?:для|for|под|на)\s+"
+    r"(?P<os>[a-zA-Zа-яА-Я0-9+_.-]+)"
+    r"(?:\s+(?P<osv>[0-9][0-9.]*))?",
+    re.IGNORECASE,
+)
+_KNOWN_OS_RE = re.compile(
+    r"\b(?P<os>ubuntu|debian|android|windows|win|rhel|alpine|solaris|freebsd|"
+    r"убунту|дебиан|андроид|виндовс)\b"
+    r"(?:\s+(?P<osv>[0-9][0-9.]*))?",
     re.IGNORECASE,
 )
 
@@ -84,6 +98,22 @@ def _normalize_os(value: str | None) -> str | None:
     }
     key = value.strip().lower()
     return mapping.get(key, key)
+
+
+def _extract_os(raw: str, params: dict[str, str]) -> tuple[str | None, str | None]:
+    os_name = _normalize_os(params.get("os"))
+    os_version = params.get("os_version")
+    if os_name:
+        return os_name, os_version
+
+    for regex in (_OS_PHRASE_RE, _KNOWN_OS_RE):
+        match = regex.search(raw)
+        if not match:
+            continue
+        candidate = _normalize_os(match.group("os"))
+        if candidate:
+            return candidate, match.groupdict().get("osv")
+    return None, None
 
 
 def _parse_sort(raw: str, params: dict[str, str]) -> Literal["newest", "oldest", "name"]:
@@ -140,7 +170,19 @@ def _parse_product(raw: str, params: dict[str, str]) -> str:
         return "postgresql"
     if "python" in low:
         return "python"
-    token_match = re.search(r"\b([a-z0-9][a-z0-9+_.-]{1,30})\b", low)
+    cleaned = re.sub(r"\b[a-z_]+\s*=\s*[a-z0-9._-]+\b", " ", low, flags=re.IGNORECASE)
+    cleaned = _OS_PHRASE_RE.sub(" ", cleaned)
+    cleaned = _KNOWN_OS_RE.sub(" ", cleaned)
+    cleaned = _ANY_VERSION_RE.sub(" ", cleaned)
+    cleaned = re.sub(
+        r"\b(дай|дайте|мне|найди|найдите|покажи|покажите|скачай|скачать|нужен|нужна|нужно|"
+        r"список|все|всех|пакет|пакеты|пакетов|версии|версий|версия|package|packages|version|versions|"
+        r"give|me|find|show|get|need|list|download|for)\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    token_match = re.search(r"\b([a-z0-9][a-z0-9+_.-]{1,30}(?:\s+[a-z0-9][a-z0-9+_.-]{1,30}){0,4})\b", cleaned)
     return token_match.group(1) if token_match else "postgresql"
 
 
@@ -167,8 +209,7 @@ def parse_scenario_query(text: str) -> ScenarioQuery | None:
     package_format = _parse_format(raw, params)
     source_name = params.get("source")
     product = _parse_product(raw, params)
-    os_name = _normalize_os(params.get("os"))
-    os_version = params.get("os_version")
+    os_name, os_version = _extract_os(raw, params)
 
     m_specific = _PRODUCT_VERSION_OS_RE.search(raw)
     if m_specific:
@@ -193,6 +234,20 @@ def parse_scenario_query(text: str) -> ScenarioQuery | None:
             product=m_versions_os.group("product").lower(),
             os=_normalize_os(m_versions_os.group("os")),
             os_version=m_versions_os.group("osv"),
+            package_format=package_format,
+            source_name=source_name,
+            sort_by=sort_by,
+            limit=limit,
+            show=show,
+            raw_query=raw,
+        )
+
+    if _VERSION_HINT_RE.search(raw) and os_name:
+        return ScenarioQuery(
+            scenario_type="versions_by_os",
+            product=product,
+            os=os_name,
+            os_version=os_version,
             package_format=package_format,
             source_name=source_name,
             sort_by=sort_by,

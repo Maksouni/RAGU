@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -17,9 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 class PackageScraperService:
-    def __init__(self, timeout_sec: float = 30.0) -> None:
+    def __init__(self, timeout_sec: float = 30.0, max_attempts: int = 3, backoff_base_sec: float = 0.5) -> None:
         self._timeout_sec = timeout_sec
-        self._client = httpx.AsyncClient(timeout=timeout_sec, trust_env=False)
+        self._max_attempts = max(1, max_attempts)
+        self._backoff_base_sec = max(0.0, backoff_base_sec)
+        self._last_errors: dict[str, str] = {}
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout_sec, connect=min(10.0, timeout_sec)),
+            follow_redirects=True,
+            trust_env=False,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -31,11 +39,11 @@ class PackageScraperService:
         product: str,
         requested_version: str | None = None,
     ) -> list[PackageArtifact]:
+        self._last_errors.pop(template.template_id, None)
         try:
             if template.parser_type in {"deb_html", "rpm_html", "exe_html"}:
                 assert template.list_url and template.base_url and template.source_url
-                response = await self._client.get(template.list_url)
-                response.raise_for_status()
+                response = await self._get_with_retry(template.list_url, template.template_id)
                 html = response.text
                 if template.parser_type == "deb_html":
                     return parse_deb_html_listing(
@@ -72,8 +80,7 @@ class PackageScraperService:
 
             if template.parser_type == "apk_index":
                 assert template.list_url and template.base_url and template.source_url
-                response = await self._client.get(template.list_url)
-                response.raise_for_status()
+                response = await self._get_with_retry(template.list_url, template.template_id)
                 return parse_apk_index(
                     apkindex_tar_gz=response.content,
                     base_url=template.base_url,
@@ -84,6 +91,41 @@ class PackageScraperService:
                     os_version=template.os_version,
                     requested_version=requested_version,
                 )
-        except Exception:
-            logger.exception("Template scrape failed template_id=%s", template.template_id)
+        except Exception as exc:
+            self._last_errors[template.template_id] = str(exc)[:500]
+            logger.exception(
+                "Template scrape failed template_id=%s product=%s requested_version=%s error=%s",
+                template.template_id,
+                product,
+                requested_version,
+                exc,
+            )
         return []
+
+    def last_errors_for(self, template_ids: list[str]) -> dict[str, str]:
+        return {template_id: self._last_errors[template_id] for template_id in template_ids if template_id in self._last_errors}
+
+    async def _get_with_retry(self, url: str, template_id: str) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                response = await self._client.get(url)
+                response.raise_for_status()
+                return response
+            except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+                if attempt >= self._max_attempts:
+                    break
+                delay = self._backoff_base_sec * (2 ** (attempt - 1))
+                logger.warning(
+                    "Source fetch failed template_id=%s attempt=%s/%s url=%s error=%s; retrying in %.1fs",
+                    template_id,
+                    attempt,
+                    self._max_attempts,
+                    url,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        assert last_error is not None
+        raise last_error

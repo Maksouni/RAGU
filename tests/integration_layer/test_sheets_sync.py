@@ -61,6 +61,38 @@ def test_sheets_sync_idempotent() -> None:
     assert backend.errors == []
 
 
+def test_sheets_sync_writes_source_errors_to_audit() -> None:
+    tmp_dir = Path("ragu_working_dir") / "pytest_tmp" / f"sheets-errors-{uuid4().hex}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    outbox = OutboxRepository(tmp_dir / "outbox.sqlite")
+    event = AskExchangeEvent(
+        event_id="evt-source-error",
+        question="postgresql versions",
+        answer="Источник данных временно недоступен",
+        mode="local",
+        user_id="u1",
+        chat_id="c1",
+        correlation_id="corr-1",
+        timestamp=datetime.now(timezone.utc),
+        metadata={"source_errors": {"template-1": "timeout"}},
+    )
+    outbox.enqueue_event(event)
+    outbox.mark_ingested(["evt-source-error"], ingest_status_code=202)
+
+    settings = IntegrationSettings(
+        SHEETS_SYNC_ENABLED=True,
+        GOOGLE_SHEETS_SPREADSHEET_ID="dummy",
+        GOOGLE_SERVICE_ACCOUNT_JSON_PATH="dummy.json",
+    )
+    backend = FakeSheetsBackend()
+    worker = SheetsSyncWorker(settings=settings, outbox=outbox, backend=backend)
+
+    assert worker.sync_once() == 1
+    assert backend.errors[0]["event_id"] == "evt-source-error"
+    assert backend.errors[0]["stage"] == "source_fetch:template-1"
+    assert backend.errors[0]["error"] == "timeout"
+
+
 class FakeWorksheet:
     def __init__(self, values: list[list[str]]) -> None:
         self.values = values

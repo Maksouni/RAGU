@@ -471,6 +471,7 @@ Normalize-ProxyVariables
 Ensure-DockerReady -DockerPath $dockerBin
 
 Ensure-EnvDefault -Name "API_KEY" -Value "local"
+Ensure-EnvDefault -Name "LLM_PROVIDER" -Value "ollama"
 Ensure-EnvDefault -Name "BASE_URL" -Value "http://127.0.0.1:11434/v1"
 Ensure-EnvDefault -Name "EMBEDDING_BASE_URL" -Value "http://127.0.0.1:11434/v1"
 Ensure-EnvDefault -Name "LLM_MODEL_NAME" -Value "qwen2.5:3b"
@@ -479,6 +480,7 @@ Ensure-EnvDefault -Name "MEMGRAPH_URI" -Value "bolt://127.0.0.1:7687"
 Ensure-EnvDefault -Name "OLLAMA_AUTO_PULL" -Value "false"
 Ensure-EnvDefault -Name "MEMGRAPH_LAB_ENABLED" -Value "true"
 Ensure-EnvDefault -Name "BOT_PLATFORM" -Value "telegram"
+Ensure-EnvDefault -Name "SEED_DEMO_IT_KNOWLEDGE" -Value "true"
 $sheetsEnabled = ([System.Environment]::GetEnvironmentVariable("SHEETS_SYNC_ENABLED", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
 $googleCredsPath = [System.Environment]::GetEnvironmentVariable("GOOGLE_SERVICE_ACCOUNT_JSON_PATH", "Process")
 if ($sheetsEnabled -and -not [string]::IsNullOrWhiteSpace($googleCredsPath) -and -not (Test-Path -LiteralPath $googleCredsPath)) {
@@ -486,6 +488,14 @@ if ($sheetsEnabled -and -not [string]::IsNullOrWhiteSpace($googleCredsPath) -and
     Write-Host "Sheets worker will stay alive, but rows cannot sync until GOOGLE_SERVICE_ACCOUNT_JSON_PATH is fixed."
 }
 $disableLlm = ([System.Environment]::GetEnvironmentVariable("DISABLE_LLM_ANSWERS", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
+$llmProvider = ([System.Environment]::GetEnvironmentVariable("LLM_PROVIDER", "Process") + "").Trim().ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($llmProvider)) {
+    $llmProvider = "ollama"
+    [System.Environment]::SetEnvironmentVariable("LLM_PROVIDER", $llmProvider, "Process")
+}
+if ($llmProvider -notin @("ollama", "mistral", "custom")) {
+    throw "Unsupported LLM_PROVIDER='$llmProvider'. Use ollama, mistral, or custom."
+}
 $autoPullModels = ([System.Environment]::GetEnvironmentVariable("OLLAMA_AUTO_PULL", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
 $memgraphLabEnabled = ([System.Environment]::GetEnvironmentVariable("MEMGRAPH_LAB_ENABLED", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
 $startupTimeoutRaw = [System.Environment]::GetEnvironmentVariable("FASTAPI_START_TIMEOUT_SEC", "Process")
@@ -500,54 +510,94 @@ if ([string]::IsNullOrWhiteSpace($startupTimeoutRaw)) {
 }
 if ($startupTimeout -lt 10) { $startupTimeout = 120 }
 
-$ollamaBin = Resolve-ToolPath -CommandName "ollama" -FallbackPaths @(
-    (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
-    "C:\Program Files\Ollama\ollama.exe"
-)
-if (-not $ollamaBin) {
-    throw "Ollama is not installed or not in PATH. Install Ollama or set OLLAMA_BIN in .env."
-}
-[System.Environment]::SetEnvironmentVariable("OLLAMA_BIN", $ollamaBin, "Process")
-
-$baseUrl = ([System.Environment]::GetEnvironmentVariable("BASE_URL", "Process") + "").Trim()
-if ([string]::IsNullOrWhiteSpace($baseUrl)) {
-    $baseUrl = "http://127.0.0.1:11434/v1"
-}
-$ollamaApiRoot = $baseUrl -replace "/v1/?$", ""
-
-Ensure-OllamaApiReady -OllamaBin $ollamaBin -ApiRoot $ollamaApiRoot
-if ($disableLlm) {
-    Write-Host "DISABLE_LLM_ANSWERS=true -> LLM generation is disabled, embeddings stay enabled for semantic search."
-}
-Write-Host "Checking Ollama models..."
-$modelTags = Get-OllamaTags -ApiRoot $ollamaApiRoot
-$llmModel = [System.Environment]::GetEnvironmentVariable("LLM_MODEL_NAME", "Process")
-$embModel = [System.Environment]::GetEnvironmentVariable("EMBEDDER_MODEL_NAME", "Process")
-$hasLlm = Test-OllamaModelPresent -ModelName $llmModel -Tags $modelTags
-$hasEmb = Test-OllamaModelPresent -ModelName $embModel -Tags $modelTags
-
-if ((-not $hasEmb) -or ((-not $disableLlm) -and (-not $hasLlm))) {
-    if (-not $autoPullModels) {
-        if ($disableLlm) {
-            throw "Required Ollama embedder model is missing (EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $embModel"
-        }
-        throw "Required Ollama models are missing (LLM='$llmModel', EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $llmModel ; ollama pull $embModel"
+if ($llmProvider -eq "mistral") {
+    $apiKey = ([System.Environment]::GetEnvironmentVariable("MISTRAL_API_KEY", "Process") + "").Trim()
+    if (-not [string]::IsNullOrWhiteSpace($apiKey)) {
+        [System.Environment]::SetEnvironmentVariable("API_KEY", $apiKey, "Process")
     }
-}
 
-if ((-not $disableLlm) -and (-not $hasLlm)) {
-    Write-Host "Pulling LLM model $llmModel ..."
-    & $ollamaBin pull $llmModel | Out-Host
-}
-if (-not $hasEmb) {
-    Write-Host "Pulling embedder model $embModel ..."
-    & $ollamaBin pull $embModel | Out-Host
-}
-$modelTags = Get-OllamaTags -ApiRoot $ollamaApiRoot
-$hasLlm = Test-OllamaModelPresent -ModelName $llmModel -Tags $modelTags
-$hasEmb = Test-OllamaModelPresent -ModelName $embModel -Tags $modelTags
-if (-not $hasEmb -or ((-not $disableLlm) -and (-not $hasLlm))) {
-    throw "Ollama API is up, but required models are still unavailable (LLM='$llmModel', EMB='$embModel')."
+    $baseUrl = ([System.Environment]::GetEnvironmentVariable("BASE_URL", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($baseUrl) -or $baseUrl -match "127\.0\.0\.1:11434|localhost:11434") {
+        [System.Environment]::SetEnvironmentVariable("BASE_URL", "https://api.mistral.ai/v1", "Process")
+    }
+    $embeddingBaseUrl = ([System.Environment]::GetEnvironmentVariable("EMBEDDING_BASE_URL", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($embeddingBaseUrl) -or $embeddingBaseUrl -match "127\.0\.0\.1:11434|localhost:11434") {
+        [System.Environment]::SetEnvironmentVariable("EMBEDDING_BASE_URL", "https://api.mistral.ai/v1", "Process")
+    }
+    $llmModel = ([System.Environment]::GetEnvironmentVariable("LLM_MODEL_NAME", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($llmModel) -or $llmModel -eq "qwen2.5:3b") {
+        [System.Environment]::SetEnvironmentVariable("LLM_MODEL_NAME", "mistral-small-latest", "Process")
+    }
+    $embModel = ([System.Environment]::GetEnvironmentVariable("EMBEDDER_MODEL_NAME", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($embModel) -or $embModel -eq "nomic-embed-text") {
+        [System.Environment]::SetEnvironmentVariable("EMBEDDER_MODEL_NAME", "mistral-embed", "Process")
+    }
+    $effectiveApiKey = ([System.Environment]::GetEnvironmentVariable("API_KEY", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($effectiveApiKey) -or $effectiveApiKey -eq "local") {
+        throw "LLM_PROVIDER=mistral requires MISTRAL_API_KEY or API_KEY in .env."
+    }
+    Write-Host "LLM_PROVIDER=mistral -> skipping local Ollama startup and using Mistral API endpoints."
+    if ($disableLlm) {
+        Write-Host "DISABLE_LLM_ANSWERS=true -> LLM formatting is disabled, Mistral embeddings remain configured."
+    }
+} elseif ($llmProvider -eq "custom") {
+    $effectiveApiKey = ([System.Environment]::GetEnvironmentVariable("API_KEY", "Process") + "").Trim()
+    $baseUrl = ([System.Environment]::GetEnvironmentVariable("BASE_URL", "Process") + "").Trim()
+    $embeddingBaseUrl = ([System.Environment]::GetEnvironmentVariable("EMBEDDING_BASE_URL", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($effectiveApiKey) -or [string]::IsNullOrWhiteSpace($baseUrl) -or [string]::IsNullOrWhiteSpace($embeddingBaseUrl)) {
+        throw "LLM_PROVIDER=custom requires API_KEY, BASE_URL, and EMBEDDING_BASE_URL in .env."
+    }
+    Write-Host "LLM_PROVIDER=custom -> skipping local Ollama startup and using configured OpenAI-compatible endpoints."
+} else {
+    $ollamaBin = Resolve-ToolPath -CommandName "ollama" -FallbackPaths @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
+        "C:\Program Files\Ollama\ollama.exe"
+    )
+    if (-not $ollamaBin) {
+        throw "Ollama is not installed or not in PATH. Install Ollama or set OLLAMA_BIN in .env."
+    }
+    [System.Environment]::SetEnvironmentVariable("OLLAMA_BIN", $ollamaBin, "Process")
+
+    $baseUrl = ([System.Environment]::GetEnvironmentVariable("BASE_URL", "Process") + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+        $baseUrl = "http://127.0.0.1:11434/v1"
+    }
+    $ollamaApiRoot = $baseUrl -replace "/v1/?$", ""
+
+    Ensure-OllamaApiReady -OllamaBin $ollamaBin -ApiRoot $ollamaApiRoot
+    if ($disableLlm) {
+        Write-Host "DISABLE_LLM_ANSWERS=true -> LLM generation is disabled, embeddings stay enabled for semantic search."
+    }
+    Write-Host "Checking Ollama models..."
+    $modelTags = Get-OllamaTags -ApiRoot $ollamaApiRoot
+    $llmModel = [System.Environment]::GetEnvironmentVariable("LLM_MODEL_NAME", "Process")
+    $embModel = [System.Environment]::GetEnvironmentVariable("EMBEDDER_MODEL_NAME", "Process")
+    $hasLlm = Test-OllamaModelPresent -ModelName $llmModel -Tags $modelTags
+    $hasEmb = Test-OllamaModelPresent -ModelName $embModel -Tags $modelTags
+
+    if ((-not $hasEmb) -or ((-not $disableLlm) -and (-not $hasLlm))) {
+        if (-not $autoPullModels) {
+            if ($disableLlm) {
+                throw "Required Ollama embedder model is missing (EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $embModel"
+            }
+            throw "Required Ollama models are missing (LLM='$llmModel', EMB='$embModel'). Set OLLAMA_AUTO_PULL=true or run: ollama pull $llmModel ; ollama pull $embModel"
+        }
+    }
+
+    if ((-not $disableLlm) -and (-not $hasLlm)) {
+        Write-Host "Pulling LLM model $llmModel ..."
+        & $ollamaBin pull $llmModel | Out-Host
+    }
+    if (-not $hasEmb) {
+        Write-Host "Pulling embedder model $embModel ..."
+        & $ollamaBin pull $embModel | Out-Host
+    }
+    $modelTags = Get-OllamaTags -ApiRoot $ollamaApiRoot
+    $hasLlm = Test-OllamaModelPresent -ModelName $llmModel -Tags $modelTags
+    $hasEmb = Test-OllamaModelPresent -ModelName $embModel -Tags $modelTags
+    if (-not $hasEmb -or ((-not $disableLlm) -and (-not $hasLlm))) {
+        throw "Ollama API is up, but required models are still unavailable (LLM='$llmModel', EMB='$embModel')."
+    }
 }
 
 Write-Host "Starting Memgraph..."
@@ -606,6 +656,17 @@ for ($i = 0; $i -lt $startupTimeout; $i++) {
 
 if (-not $ready) {
     throw "API did not become ready in time. Check logs: $stdoutLog and $stderrLog"
+}
+
+$seedDemoItKnowledge = ([System.Environment]::GetEnvironmentVariable("SEED_DEMO_IT_KNOWLEDGE", "Process") + "").ToLowerInvariant() -in @("1","true","yes","on")
+if ($seedDemoItKnowledge) {
+    Write-Host "Seeding prepared IT knowledge base..."
+    & $python "scripts\seed_demo_it_knowledge.py" --api-base-url "http://127.0.0.1:8000" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Prepared IT knowledge seeding failed with exit code $LASTEXITCODE"
+    }
+} else {
+    Write-Host "SEED_DEMO_IT_KNOWLEDGE=false -> skip prepared IT knowledge seeding."
 }
 
 Write-Host "Starting orchestrator worker..."

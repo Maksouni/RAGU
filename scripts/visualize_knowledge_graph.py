@@ -5,7 +5,7 @@ This script loads a RAGU knowledge graph from storage files and creates
 an interactive HTML visualization showing entities, relations, and metadata.
 
 Usage:
-    python visualize_knowledge_graph.py [--graph-path PATH] [--output OUTPUT]
+    python visualize_knowledge_graph.py [--graph-path PATH] [--output OUTPUT] [--summary-output PATH]
 
 Examples:
     # Use default path (./ragu_working_dir/*/knowledge_graph.gml)
@@ -161,6 +161,9 @@ def format_edge_title(edge_data: dict) -> str:
     """
     lines = []
 
+    relation_type = edge_data.get("relation_type", "RELATED_TO")
+    lines.append(f"<b>Type:</b> {relation_type}")
+
     description = edge_data.get("description", "")
     if description:
         lines.append(f"<b>Relation:</b> {truncate_text(description)}")
@@ -179,6 +182,41 @@ def format_edge_title(edge_data: dict) -> str:
         lines.append(f"<b>ID:</b> {rel_id}")
 
     return "<br>".join(lines) if lines else "Relation"
+
+
+def write_demo_summary(graph: nx.Graph, output_path: str) -> None:
+    """Write a compact JSON summary useful for demo runbooks and screenshots."""
+    node_types: Dict[str, int] = {}
+    edge_types: Dict[str, int] = {}
+    examples: list[dict[str, str]] = []
+
+    for _, attrs in graph.nodes(data=True):
+        node_type = attrs.get("entity_type", "Unknown")
+        node_types[node_type] = node_types.get(node_type, 0) + 1
+
+    for source, target, attrs in graph.edges(data=True):
+        relation_type = attrs.get("relation_type", "RELATED_TO")
+        edge_types[relation_type] = edge_types.get(relation_type, 0) + 1
+        if len(examples) < 20:
+            examples.append(
+                {
+                    "source": str(source),
+                    "relation_type": str(relation_type),
+                    "target": str(target),
+                    "description": truncate_text(str(attrs.get("description", "")), 160),
+                }
+            )
+
+    payload = {
+        "nodes": graph.number_of_nodes(),
+        "edges": graph.number_of_edges(),
+        "node_types": dict(sorted(node_types.items())),
+        "relation_types": dict(sorted(edge_types.items())),
+        "example_relations": examples,
+    }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    print(f"Demo graph summary saved to: {output_path}")
 
 
 def create_visualization(
@@ -293,8 +331,9 @@ def create_visualization(
         strength = float(edge_data.get("relation_strength", 1.0))
         width = 1 + min(strength * 2, 5)
 
+        relation_type = edge_data.get("relation_type", "RELATED_TO")
         description = edge_data.get("description", "")
-        label = truncate_text(description, 30) if description else ""
+        label = truncate_text(str(relation_type), 30) if relation_type else truncate_text(description, 30)
 
         net.add_edge(
             source,
@@ -400,6 +439,12 @@ def main():
         action="store_true",
         help="Use light theme instead of dark theme"
     )
+    parser.add_argument(
+        "--summary-output",
+        type=str,
+        default=None,
+        help="Optional JSON summary with node types, relation types, and example relations."
+    )
 
     args = parser.parse_args()
 
@@ -444,6 +489,8 @@ def main():
         bgcolor=bgcolor,
         font_color=font_color,
     )
+    if args.summary_output:
+        write_demo_summary(graph, args.summary_output)
 
     return 0
 

@@ -24,11 +24,25 @@ def _format_unsupported_sources_answer(question: str, product: str, os_name: str
         "Источник данных не настроен для этого запроса.\n\n"
         f"Запрос: {question}\n"
         f"Распознано: product={product}, os={os_name or '*'}, format={package_format or '*'}.\n\n"
-        "Сейчас в демо настроены источники для PostgreSQL/Python и форматов deb/rpm/apk/exe "
-        "в серверных репозиториях Debian, Ubuntu, RHEL, Alpine и python.org.\n"
-        "Android APK-источники вроде Google Play или сторонних APK-каталогов не подключены, "
-        "поэтому я не буду подбирать похожие старые ответы из графа."
+        "Сейчас в демо настроены источники для PostgreSQL/Python и серверных репозиториев "
+        "Debian, Ubuntu, RHEL, Alpine и python.org.\n"
+        "Для этого продукта, ОС или формата нет подключенного registry-шаблона, поэтому я не буду "
+        "подбирать похожие старые ответы из графа."
     )
+
+
+def _format_source_unavailable_answer(question: str, errors: dict[str, str]) -> str:
+    lines = [
+        "Источник данных временно недоступен или вернул ошибку.",
+        "",
+        f"Запрос: {question}",
+        "Повторите запрос позже или выберите другой source/os/format.",
+        "",
+        "Ошибки источников:",
+    ]
+    for template_id, error in errors.items():
+        lines.append(f"- {template_id}: {error}")
+    return "\n".join(lines)
 
 
 class ScenarioManager:
@@ -97,6 +111,26 @@ class ScenarioManager:
                 requested_version=scenario_query.package_version,
             )
             all_artifacts.extend(artifacts)
+
+        source_errors = {}
+        if hasattr(self._scraper, "last_errors_for"):
+            source_errors = self._scraper.last_errors_for([t.template_id for t in templates])
+        if not all_artifacts and source_errors:
+            return ScenarioResult(
+                handled=True,
+                answer=_format_source_unavailable_answer(scenario_query.raw_query, source_errors),
+                metadata={
+                    "scenario_type": scenario_query.scenario_type,
+                    "templates_used": [t.template_id for t in templates],
+                    "artifacts_count": 0,
+                    "product": scenario_query.product,
+                    "os": scenario_query.os,
+                    "os_version": scenario_query.os_version,
+                    "package_version": scenario_query.package_version,
+                    "requested_mode": requested_mode,
+                    "source_errors": source_errors,
+                },
+            )
 
         answer = format_scenario_answer(scenario_query, all_artifacts, answer_mode=answer_mode)
         return ScenarioResult(

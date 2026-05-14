@@ -31,6 +31,49 @@ Our huggingface community is [here](https://huggingface.co/RaguTeam/)
 
 ---
 
+## Diploma Demo Runbook
+
+The current local demo is a package-search integration built around RAGU, Memgraph, Telegram/VK, Ollama, and Google Sheets.
+
+Primary runbook: [docs/LOCAL_OLLAMA_STACK.md](docs/LOCAL_OLLAMA_STACK.md)
+Safe config template: [.env.example](.env.example)
+
+Key behavior:
+
+- `BOT_PLATFORM=telegram|vk|both|none` controls which bot entrypoints are started by `scripts/start_ollama_stack.ps1`.
+- `LLM_PROVIDER=ollama|mistral|custom` selects local Ollama, Mistral API, or another OpenAI-compatible endpoint.
+- Package queries use the parser/registry/scraper pipeline first.
+- General IT questions, for example about Docker, PostgreSQL, Git, APIs, embeddings, or bots, route to local semantic/graph search.
+- `/llm <query>` uses the prepared package or graph context, then asks the LLM to format it.
+- `/nollm <query>` returns a deterministic template/semantic answer and does not require an LLM.
+- Plain queries use `.env`: `DISABLE_LLM_ANSWERS=true` means default no-LLM, `false` means default LLM formatting.
+- The LLM does not scrape, browse, or search sources by itself. It only formats structured data already collected by Python code.
+- Embeddings are independent from the answer mode. Local demo vectors are capped at `EMBEDDING_DIM <= 20`.
+- Google Sheets sync uses `GOOGLE_SERVICE_ACCOUNT_JSON_PATH`; keep the service account JSON outside git and share the sheet with that service account email.
+
+For a lighter laptop run, set `LLM_PROVIDER=mistral`, `MISTRAL_API_KEY`, `BASE_URL=https://api.mistral.ai/v1`, `EMBEDDING_BASE_URL=https://api.mistral.ai/v1`, `LLM_MODEL_NAME=mistral-small-latest`, and `EMBEDDER_MODEL_NAME=mistral-embed`. The local graph, parser, scraper, bots, Memgraph, and Sheets flow stay the same.
+
+Useful local commands:
+
+```powershell
+.\scripts\start_ollama_stack.ps1
+.\venv\Scripts\python.exe scripts\check_demo_health.py
+.\venv\Scripts\python.exe scripts\check_google_sheets.py
+.\scripts\stop_ollama_stack.ps1
+```
+
+Demo bot queries:
+
+```text
+/nollm Python 3.12 для Ubuntu limit=10
+/llm дай список всех пакетов PostgreSQL 17.6 limit=13 show=4
+скачай Foo Package для Solaris format=deb
+```
+
+The unsupported-source query should return a clear message and must not reuse old graph answers as if they were successful results.
+
+---
+
 ## Install
 Better way is a local build:
 ```commandline

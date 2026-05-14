@@ -50,11 +50,24 @@ def _sort_items(query: ScenarioQuery, items: list[PackageArtifact]) -> list[Pack
     return sorted(items, key=key_fn, reverse=reverse)
 
 
+def _limit_visible_items(query: ScenarioQuery, items: list[PackageArtifact]) -> list[PackageArtifact]:
+    if not query.show:
+        return items
+    return items[: query.show]
+
+
 def _style_label(answer_mode: str) -> str:
     return (
-        "LLM режим: структурированный ответ по данным registry/scraper"
+        "LLM режим: подготовленный контекст для генеративного оформления"
         if answer_mode == "llm"
         else "NO-LLM шаблонный ответ"
+    )
+
+
+def _format_filter_line(query: ScenarioQuery) -> str:
+    return (
+        f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, "
+        f"sort={query.sort_by}, limit={query.limit}, show={query.show}"
     )
 
 
@@ -72,25 +85,39 @@ def format_scenario_answer(
         return (
             f"{label}\n"
             "Статус: по заданному сценарию пакеты не найдены в доступных источниках.\n"
-            f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, "
-            f"sort={query.sort_by}, limit={query.limit}, show={query.show}"
+            + _format_filter_line(query)
         )
 
     if query.scenario_type == "versions_by_os":
+        visible_items = _limit_visible_items(query, items)
         by_version = defaultdict(list)
         for item in items:
             by_version[item.package_version].append(item)
+        visible_by_version = defaultdict(list)
+        for item in visible_items:
+            visible_by_version[item.package_version].append(item)
         versions = sorted(by_version.keys(), key=_version_key, reverse=query.sort_by != "oldest")
-        lines = [
-            label,
-            f"Сценарий: версии {query.product} для {query.os} {query.os_version or '*'}",
-            f"Найдено версий: {len(versions)}; пакетов: {len(items)}",
-            f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, sort={query.sort_by}, limit={query.limit}, show={query.show}",
-            "",
-            "Результаты:",
-        ]
-        for version in versions:
-            examples = by_version[version][: query.show]
+        visible_versions = [version for version in versions if visible_by_version.get(version)]
+        if answer_mode == "llm":
+            lines = [
+                label,
+                f"Краткая сводка: найдено {len(versions)} версий и {len(items)} пакетов для {query.product}.",
+                f"Область поиска: {query.os or '*'} {query.os_version or '*'}; LLM получает только эти подготовленные данные.",
+                _format_filter_line(query),
+                "",
+                "Данные для оформления:",
+            ]
+        else:
+            lines = [
+                label,
+                f"Сценарий: версии {query.product} для {query.os} {query.os_version or '*'}",
+                f"Найдено версий: {len(versions)}; пакетов: {len(items)}",
+                _format_filter_line(query),
+                "",
+                "Результаты:",
+            ]
+        for version in visible_versions:
+            examples = visible_by_version[version]
             lines.append(f"- {version}: пакетов {len(by_version[version])}")
             for ex in examples:
                 lines.append(f"  {ex.package_name} -> {ex.artifact_url}")
@@ -99,22 +126,37 @@ def format_scenario_answer(
                 break
         return "\n".join(lines)
 
+    visible_items = _limit_visible_items(query, items)
     by_format = defaultdict(list)
     for item in items:
         by_format[item.package_format].append(item)
+    visible_by_format = defaultdict(list)
+    for item in visible_items:
+        visible_by_format[item.package_format].append(item)
     formats = sorted(by_format.keys())
-    lines = [
-        label,
-        f"Сценарий: пакеты {query.product} {query.package_version or '*'}",
-        f"Форматы: {', '.join(formats)}",
-        f"Найдено пакетов: {len(items)}",
-        f"Фильтры: format={query.package_format or '*'}, source={query.source_name or '*'}, sort={query.sort_by}, limit={query.limit}, show={query.show}",
-        "",
-        "Результаты:",
-    ]
-    for fmt in formats:
+    visible_formats = [fmt for fmt in formats if visible_by_format.get(fmt)]
+    if answer_mode == "llm":
+        lines = [
+            label,
+            f"Краткая сводка: найдено {len(items)} пакетов {query.product} {query.package_version or '*'}; форматы: {', '.join(formats)}.",
+            "LLM не ищет источники сама: ниже только нормализованный результат registry/scraper.",
+            _format_filter_line(query),
+            "",
+            "Данные для оформления:",
+        ]
+    else:
+        lines = [
+            label,
+            f"Сценарий: пакеты {query.product} {query.package_version or '*'}",
+            f"Форматы: {', '.join(formats)}",
+            f"Найдено пакетов: {len(items)}",
+            _format_filter_line(query),
+            "",
+            "Результаты:",
+        ]
+    for fmt in visible_formats:
         lines.append(f"- {fmt}: {len(by_format[fmt])} пакетов")
-        for ex in by_format[fmt][: query.show]:
+        for ex in visible_by_format[fmt]:
             lines.append(f"  {ex.package_name} {ex.package_version} -> {ex.artifact_url}")
         if len(lines) >= max_lines:
             lines.append("... ответ сокращен, данных больше.")

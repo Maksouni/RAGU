@@ -40,10 +40,31 @@ def test_parse_with_filters_and_sort() -> None:
     assert q.show == 9
 
 
-def test_parse_android_apk_request_without_version() -> None:
-    q = parse_scenario_query("дай мне Geometry Dash Lite для Android format=apk")
+def test_parse_unsupported_source_request_without_version() -> None:
+    q = parse_scenario_query("скачай Foo Package для Solaris format=deb")
     assert q is not None
     assert q.scenario_type == "formats_by_version"
-    assert q.product == "geometry dash lite"
-    assert q.os == "android"
-    assert q.package_format == "apk"
+    assert q.product == "foo package"
+    assert q.os == "solaris"
+    assert q.package_format == "deb"
+
+
+def test_parse_free_word_order_with_filters_in_middle() -> None:
+    q = parse_scenario_query("покажи для Ubuntu Python limit=10 3.12 show=4 format=deb")
+    assert q is not None
+    assert q.scenario_type == "formats_by_version"
+    assert q.product == "python"
+    assert q.package_version == "3.12"
+    assert q.os == "ubuntu"
+    assert q.package_format == "deb"
+    assert q.limit == 10
+    assert q.show == 4
+
+
+def test_parse_versions_when_os_comes_before_product() -> None:
+    q = parse_scenario_query("найди для debian 13 все версии PostgreSQL limit=10")
+    assert q is not None
+    assert q.scenario_type == "versions_by_os"
+    assert q.product == "postgresql"
+    assert q.os == "debian"
+    assert q.os_version == "13"

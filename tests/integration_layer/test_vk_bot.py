@@ -60,6 +60,21 @@ async def test_vk_start_command_returns_shared_start_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vk_help_command_returns_shared_start_message() -> None:
+    vk_api = FakeVkApi()
+    orchestrator = FakeOrchestrator()
+
+    await _handle_message(
+        update={"type": "message_new", "object": {"message": {"text": "/help", "peer_id": 123, "from_id": 456}}},
+        vk_api=vk_api,
+        orchestrator=orchestrator,
+    )
+
+    assert vk_api.sent == [(123, START_MESSAGE)]
+    assert orchestrator.calls == []
+
+
+@pytest.mark.asyncio
 async def test_vk_message_uses_same_orchestrator_flow() -> None:
     vk_api = FakeVkApi()
     orchestrator = FakeOrchestrator()

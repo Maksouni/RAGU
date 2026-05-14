@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 from argparse import ArgumentParser
 
@@ -12,7 +13,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from apps.common.settings import get_settings  # noqa: E402
 
 
+def _clear_dead_local_proxy() -> None:
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        value = os.environ.get(name)
+        if value and "127.0.0.1:9" in value:
+            os.environ.pop(name, None)
+
+
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    _clear_dead_local_proxy()
+
     parser = ArgumentParser()
     parser.add_argument("--details", action="store_true")
     args = parser.parse_args()

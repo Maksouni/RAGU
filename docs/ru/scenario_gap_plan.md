@@ -1,177 +1,62 @@
-# Gap Plan: Сценарии PostgreSQL (Debian 13 и версия 17.6)
+# План демонстрационных сценариев RAGU
 
-Дата: 2026-04-13  
-Цель: довести проект до состояния, когда 2 целевых сценария стабильно воспроизводятся end-to-end.
+Дата: 2026-05-13
+Цель: держать проект в воспроизводимом демонстрационном состоянии для сценариев Telegram/VK -> orchestrator -> registry/scraper -> Memgraph -> Google Sheets.
 
-## 1) Что уже есть
+## Что уже есть
 
-- Интеграционный слой Telegram -> API -> outbox -> ingest -> Google Sheets:
-  - `apps/bot`
-  - `apps/orchestrator`
-  - `apps/sheets_sync`
-  - `apps/common`
-- FastAPI endpoints:
+- Telegram-бот и VK-бот используют общий `START_MESSAGE`, routing и `AskOrchestrator`.
+- `BOT_PLATFORM=telegram|vk|both|none` выбирает активные bot entrypoints.
+- FastAPI demo предоставляет:
   - `POST /ask/local`
   - `POST /ask/global`
   - `POST /ingest/json`
+  - `POST /answer/llm`
   - `GET /status`
+- Registry/scraper слой собирает пакетные артефакты из настроенных серверных источников.
+- Orchestrator парсит `product`, `version`, `os`, `format`, `limit`, `show`, `sort`, `source`.
+- `/nollm` формирует детерминированный шаблонный ответ.
+- `/llm` форматирует уже подготовленный структурированный контекст; LLM не скрапит и не ищет сама.
+- Outbox индексирует успешные события в Memgraph и передает их в Google Sheets через `sheets_sync`.
+- `EMBEDDING_DIM` принудительно ограничивается максимумом 20.
 
-## 2) Чего не хватает для ваших сценариев
+## Целевые PRD-сценарии
 
-### Критичные пробелы (blockers)
+1. `/nollm Python 3.12 для Ubuntu limit=10`
+   - шаблонный ответ;
+   - LLM не вызывается;
+   - событие сохраняется как успешный ask exchange.
 
-1. Нет `apps/registry` с шаблонами источников (repo templates + rules).
-2. Нет `apps/scraper` / `apps/xdt_mgr` для обхода источников и сборки карточек пакетов.
-3. Нет логики в `mgr`, которая:
-   - понимает параметры запроса (`product`, `os`, `os_version`, `package_version`),
-   - выбирает набор источников из registry,
-   - запускает сбор по ним,
-   - нормализует итог в единый контракт ответа.
-4. Нет контрактов данных для сценариев (единый ответ с `package_name`, `version`, `format`, `artifact_url`, `source_url`).
-5. Нет e2e тестов по 2 сценариям с фикстурами источников.
+2. `/llm дай список всех пакетов PostgreSQL 17.6 limit=13 show=4`
+   - используется тот же registry/scraper pipeline;
+   - LLM получает только подготовленный контекст;
+   - ответ визуально отличается от no-LLM.
 
-### Некритичные, но важные
+3. Обычный запрос без `/llm` и `/nollm`
+   - использует default из `.env`;
+   - `DISABLE_LLM_ANSWERS=true` -> no-LLM;
+   - `DISABLE_LLM_ANSWERS=false` -> LLM formatting.
 
-1. Нет кэша сырого ответа по источникам (чтобы не DDOS-ить репозитории).
-2. Нет SLA/таймаут-политики на внешний fetch (retry/backoff/circuit breaker на источник).
-3. Нет curated "golden dataset" для приемки.
+4. Неподдержанный источник
+   - пример: `скачай Foo Package для Solaris format=deb`;
+   - система возвращает понятное сообщение;
+   - старые semantic fallback-данные не выдаются как успешный результат.
 
-## 3) План внедрения (что добавить в код)
+## Проверки перед сдачей
 
-## Этап A: Registry + contracts (обязательно сначала)
+```powershell
+.\venv\Scripts\python.exe -m pytest tests\integration_layer -q
+.\venv\Scripts\python.exe scripts\check_demo_health.py
+.\venv\Scripts\python.exe scripts\check_google_sheets.py
+```
 
-### Новые файлы
+После ручного E2E:
 
-- `apps/registry/__init__.py`
-- `apps/registry/models.py`
-- `apps/registry/repository.py`
-- `apps/registry/templates/debian.yaml`
-- `apps/registry/templates/ubuntu.yaml`
-- `apps/registry/templates/redhat.yaml`
-- `apps/registry/templates/alpine.yaml`
-
-### Что реализовать
-
-- Модель шаблона источника:
-  - `repo_id`, `vendor`, `os`, `os_version`, `format`, `fetch_method`, `url_template`, `parse_rules`.
-- Фильтр по параметрам сценария:
-  - Сценарий 1: `os=debian`, `os_version=13`.
-  - Сценарий 2: все шаблоны.
-
-## Этап B: Source fetchers (API + scrape)
-
-### Новые файлы
-
-- `apps/scraper/__init__.py`
-- `apps/scraper/client.py`
-- `apps/scraper/fetchers/base.py`
-- `apps/scraper/fetchers/http_json.py`
-- `apps/scraper/fetchers/html_index.py`
-- `apps/scraper/parsers/deb_parser.py`
-- `apps/scraper/parsers/rpm_parser.py`
-- `apps/scraper/parsers/apk_parser.py`
-- `apps/scraper/models.py`
-
-### Что реализовать
-
-- Унифицированный контракт записи:
-  - `product`, `package_name`, `package_version`, `os`, `os_version`, `format`, `artifact_url`, `source_url`.
-- Дедупликация по `(package_name, package_version, format, artifact_url)`.
-
-## Этап C: Manager (mgr) orchestration logic
-
-### Новые файлы
-
-- `apps/orchestrator/scenario_manager.py`
-- `apps/orchestrator/query_parser.py`
-- `apps/orchestrator/result_formatter.py`
-
-### Изменяемые файлы
-
-- `apps/orchestrator/service.py`
-- `apps/common/models.py`
-
-### Что реализовать
-
-- Парсинг запросов:
-  - "все версии PostgreSQL для debian 13" -> Scenario 1.
-  - "все пакеты PostgreSQL 17.6" -> Scenario 2.
-- Вызов registry + scraper pipeline.
-- Формирование ответа в человекочитаемом виде + JSON payload для ingest.
-
-## Этап D: API surface для сценарных ответов
-
-### Новые файлы
-
-- `apps/orchestrator/http_server.py` (опционально, если разделять от текущего FastAPI)
-
-### Изменяемые файлы
-
-- `examples/fastapi_demo/server.py`
-
-### Что реализовать
-
-- Добавить endpoint (минимум один):
-  - `POST /ask/packages` с параметрами `product`, `os`, `os_version`, `package_version`.
-- Оставить совместимость с `/ask/local` и `/ask/global`.
-
-## Этап E: Sheets-модель под сценарии
-
-### Изменяемые файлы
-
-- `apps/sheets_sync/worker.py`
-
-### Что реализовать
-
-- Новые листы/колонки:
-  - `overview` (уже есть),
-  - `packages_catalog` (`product`, `package_name`, `package_version`, `format`, `artifact_url`, `source_url`),
-  - `scenario_runs` (`scenario_id`, `query`, `duration_ms`, `sources_count`, `records_count`, `status`).
-
-## Этап F: Тесты и приемка
-
-### Новые файлы
-
-- `tests/scenarios/test_scenario1_debian13_versions.py`
-- `tests/scenarios/test_scenario2_formats_for_version.py`
-- `tests/scenarios/fixtures/registry_templates/*.yaml`
-- `tests/scenarios/fixtures/source_snapshots/*`
-- `tests/scenarios/test_e2e_bot_to_sheets.py`
-
-### Что проверить
-
-- Scenario 1:
-  - возвращается список версий PostgreSQL для Debian 13,
-  - для каждой записи есть пакет и ссылка на `.deb`.
-- Scenario 2:
-  - для PostgreSQL 17.6 возвращаются форматы (deb/rpm/apk),
-  - есть пакеты и источники по каждому формату.
-- Данные попадают в Memgraph и Google Sheets.
-
-## 4) Минимальный Definition of Done
-
-1. Два сценария проходят e2e без ручных правок.
-2. Ответы детерминированы по тестовым снапшотам источников.
-3. `overview` и `packages_catalog` в Sheets заполняются автоматически.
-4. Регресс-тесты запускаются одной командой:
-   - `python -m pytest tests/scenarios -q`
-
-## 5) Предлагаемый порядок работ (риск-минимум)
-
-1. Этап A (registry)
-2. Этап B (fetchers/parsers)
-3. Этап C (mgr orchestration)
-4. Этап F (unit/integration на сценарии)
-5. Этап E (расширение Sheets)
-6. Этап D (внешний endpoint, если нужен отдельно)
-
-## 6) Ссылки на текущие точки входа
-
-- Bot: `apps/bot/main.py`
-- Orchestrator worker: `apps/orchestrator/main.py`
-- Ask orchestration: `apps/orchestrator/service.py`
-- Ingest worker: `apps/orchestrator/ingest_worker.py`
-- Sheets worker: `apps/sheets_sync/worker.py`
-- FastAPI demo: `examples/fastapi_demo/server.py`
-- Start script: `scripts/start_ollama_stack.ps1`
-- Stop script: `scripts/stop_ollama_stack.ps1`
+- `/status` доступен и показывает `embedding_dim <= 20`;
+- нужный бот стартует согласно `BOT_PLATFORM`;
+- `/start` и `/help` показывают актуальную инструкцию;
+- no-LLM и LLM ответы заметно отличаются;
+- Memgraph содержит `AskExchange`, `UserQuery`, `StructuredAnswer`, `PackageArtifact`;
+- связи имеют понятные типы: `HAS_QUESTION`, `ANSWERED_BY`, `FOUND_ARTIFACT`;
+- Google Sheets получает записи в `overview`, `queries`, `answers`, `ingest_jobs`;
+- неподдержанный запрос не попадает в успешные результаты.

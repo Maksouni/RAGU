@@ -27,6 +27,32 @@ _DOMAIN_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 _FILTER_TOKEN_RE = re.compile(r"\b(format|source|sort|limit|show|os|os_version|product)\s*=", re.IGNORECASE)
+_GENERAL_IT_TOKEN_RE = re.compile(
+    r"\b("
+    r"docker|container|image|volume|compose|kubernetes|k8s|linux|ubuntu|debian|"
+    r"postgresql|postgres|sql|database|index|transaction|python|pip|venv|fastapi|"
+    r"api|endpoint|http|rest|git|branch|commit|merge|rebase|ssh|tls|ssl|certificate|jwt|oauth|"
+    r"rag|memgraph|graph|embedding|embeddings|vector|llm|ollama|mistral|telegram|vk|bot|"
+    r"redis|cache|nginx|proxy|json|yaml|dockerfile|ci|cd"
+    r")\b",
+    re.IGNORECASE,
+)
+_GENERAL_IT_RU_TOKEN_RE = re.compile(
+    r"\b("
+    r"докер|контейнер|образ|том|кубернетес|линукс|база|данных|индекс|"
+    r"транзакц|питон|пайтон|апи|запрос|сервер|клиент|гит|ветк|коммит|"
+    r"мердж|ребейз|токен|сертификат|шифрован|эндпоинт|бот|граф|эмбеддинг|вектор|модель|кэш|прокси"
+    r")",
+    re.IGNORECASE,
+)
+_QUESTION_WORD_RE = re.compile(
+    r"\b(как|что|чем|почему|зачем|объясни|расскажи|покажи|how|what|why|explain|describe)\b",
+    re.IGNORECASE,
+)
+_CHAT_ONLY_RE = re.compile(
+    r"^(привет|здравствуй|как дела|спасибо|ок|окей|hello|hi|thanks|thank you)[!?.\s]*$",
+    re.IGNORECASE,
+)
 
 
 def is_supported_package_query(text: str) -> bool:
@@ -36,3 +62,19 @@ def is_supported_package_query(text: str) -> bool:
     if parse_scenario_query(value) is not None:
         return True
     return bool(_VERSION_RE.search(value) and re.search(r"\b[a-zA-Z][a-zA-Z0-9+_.-]{1,30}\b", value))
+
+
+def is_supported_general_it_query(text: str) -> bool:
+    value = (text or "").strip()
+    if len(value) < 6:
+        return False
+    if _CHAT_ONLY_RE.search(value):
+        return False
+    if is_supported_package_query(value):
+        return False
+
+    has_it_terms = bool(_GENERAL_IT_TOKEN_RE.search(value) or _GENERAL_IT_RU_TOKEN_RE.search(value))
+    if not has_it_terms:
+        return False
+
+    return bool(_QUESTION_WORD_RE.search(value) or value.endswith("?") or len(value.split()) >= 4)

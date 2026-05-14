@@ -23,7 +23,7 @@ router = Router()
 _orchestrator: AskOrchestrator | None = None
 
 
-@router.message(Command("start"))
+@router.message(Command("start", "help"))
 async def cmd_start(message: Message) -> None:
     await message.answer(START_MESSAGE)
 

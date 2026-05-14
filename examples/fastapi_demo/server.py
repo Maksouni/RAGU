@@ -33,6 +33,35 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
 AnswerMode = Literal["auto", "llm", "no_llm"]
 EMBEDDING_TEXT_LIMIT = 1800
+LEXICAL_MIN_SCORE = 2
+PREPARED_IT_MIN_SCORE = 2
+FAST_GRAPH_EVENT_TYPES = {"ask_exchange", "prepared_it_answer"}
+LEXICAL_STOPWORDS = {
+    "and",
+    "are",
+    "between",
+    "for",
+    "from",
+    "how",
+    "into",
+    "the",
+    "what",
+    "why",
+    "with",
+    "без",
+    "для",
+    "зачем",
+    "как",
+    "между",
+    "мне",
+    "нужны",
+    "объясни",
+    "почему",
+    "покажи",
+    "расскажи",
+    "что",
+    "чем",
+}
 
 
 class AppState:
@@ -78,6 +107,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _llm_provider() -> str:
+    return (os.getenv("LLM_PROVIDER") or "ollama").strip().lower() or "ollama"
+
+
 def _llm_enabled(answer_mode: AnswerMode) -> bool:
     if answer_mode == "llm":
         return True
@@ -87,12 +120,36 @@ def _llm_enabled(answer_mode: AnswerMode) -> bool:
 
 
 def _tokenize(text: str) -> List[str]:
-    return [t for t in re.findall(r"\w+", text.lower()) if len(t) >= 3]
+    return [t for t in re.findall(r"\w+", text.lower()) if len(t) >= 3 and t not in LEXICAL_STOPWORDS]
 
 
 def _match_score(content: str, tokens: List[str]) -> int:
-    lowered = content.lower()
-    return sum(1 for token in tokens if token in lowered)
+    content_tokens = set(_tokenize(content))
+    return sum(1 for token in tokens if token in content_tokens)
+
+
+def _normalize_question(text: str) -> str:
+    return " ".join((text or "").strip().lower().rstrip(".?!").split())
+
+
+def _extract_prepared_answer(description: str) -> str:
+    marker = "Ответ:"
+    if marker not in description:
+        return description.strip()
+    return description.split(marker, 1)[1].strip()
+
+
+def _build_prepared_it_answer(node: Entity, search_scope: Literal["local", "global"], retrieval_source: str) -> str:
+    answer = _extract_prepared_answer(node.description or "")
+    return "\n".join(
+        [
+            "NO-LLM заготовленный IT-ответ",
+            f"Внутренний режим: {search_scope}; генерация LLM: выключена; поиск: {retrieval_source}.",
+            f"Тема: {node.entity_name}",
+            "",
+            answer,
+        ]
+    )
 
 
 def _stable_id(prefix: str, text: str) -> str:
@@ -112,6 +169,18 @@ def _parse_doc(doc: str) -> Dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _split_fast_graph_docs(docs: List[str]) -> tuple[List[str], List[str]]:
+    fast_docs: List[str] = []
+    regular_docs: List[str] = []
+    for doc in docs:
+        parsed = _parse_doc(doc)
+        if parsed and parsed.get("event_type") in FAST_GRAPH_EVENT_TYPES:
+            fast_docs.append(doc)
+        else:
+            regular_docs.append(doc)
+    return fast_docs, regular_docs
 
 
 def _artifact_nodes_from_answer(event_id: str, answer: str) -> tuple[list[Entity], list[Relation]]:
@@ -156,6 +225,29 @@ def build_fast_graph_from_docs(docs: List[str]) -> tuple[List[Entity], List[Rela
     for idx, doc in enumerate(docs):
         normalized = " ".join(doc.split())
         parsed = _parse_doc(doc)
+        if parsed and parsed.get("event_type") == "prepared_it_answer":
+            question = str(parsed.get("question") or parsed.get("title") or "").strip()
+            answer = str(parsed.get("answer") or "").strip()
+            topic = str(parsed.get("topic") or question or f"prepared_it_answer_{idx}").strip()
+            keywords = parsed.get("keywords") if isinstance(parsed.get("keywords"), list) else []
+            keyword_text = ", ".join(str(item) for item in keywords if str(item).strip())
+            prepared_id = str(parsed.get("id") or _stable_id("prepared_it", f"{topic}|{question}|{answer}"))
+            description = _for_embedding(
+                f"Готовый IT-ответ. Тема: {topic}. Вопрос: {question}. "
+                f"Ключевые слова: {keyword_text}. Ответ: {answer}"
+            )
+            entities.append(
+                Entity(
+                    id=prepared_id,
+                    entity_name=topic[:120],
+                    entity_type="PreparedITAnswer",
+                    description=description,
+                    source_chunk_id=[prepared_id],
+                    documents_id=[prepared_id],
+                    clusters=[],
+                )
+            )
+            continue
         if parsed and parsed.get("event_type") == "ask_exchange":
             event_id = str(parsed.get("event_id") or _stable_id("event", normalized))
             question = str(parsed.get("question") or "")
@@ -273,7 +365,7 @@ async def _semantic_candidates(question: str, top_k: int = 8) -> tuple[list[Enti
     for node in nodes:
         haystack = f"{node.entity_name} {node.entity_type} {node.description}"
         score = _match_score(haystack, tokens)
-        if score > 0:
+        if score >= LEXICAL_MIN_SCORE:
             scored_nodes.append((score, node))
     scored_nodes.sort(key=lambda item: item[0], reverse=True)
 
@@ -281,11 +373,141 @@ async def _semantic_candidates(question: str, top_k: int = 8) -> tuple[list[Enti
     for edge in all_edges:
         haystack = f"{edge.subject_name} {edge.object_name} {edge.relation_type} {edge.description}"
         score = _match_score(haystack, tokens)
-        if score > 0:
+        if score >= LEXICAL_MIN_SCORE:
             scored_edges.append((score, edge))
     scored_edges.sort(key=lambda item: item[0], reverse=True)
 
     return [node for _, node in scored_nodes[:top_k]], [edge for _, edge in scored_edges[:top_k]], source
+
+
+def _extract_saved_question(description: str) -> str:
+    marker = "Вопрос:"
+    keywords_marker = "Ключевые слова:"
+    answer_marker = "Ответ:"
+    if marker not in description or answer_marker not in description:
+        return ""
+    saved_question = description.split(marker, 1)[1]
+    if keywords_marker in saved_question:
+        saved_question = saved_question.split(keywords_marker, 1)[0]
+    else:
+        saved_question = saved_question.split(answer_marker, 1)[0]
+    return saved_question.strip().rstrip(".")
+
+
+def _prepared_it_score(question: str, node: Entity) -> int:
+    tokens = _tokenize(question)
+    if not tokens:
+        return 0
+    saved_question = _extract_saved_question(node.description or "")
+    if saved_question and _normalize_question(saved_question) == _normalize_question(question):
+        return 100 + len(tokens)
+    haystack = f"{node.entity_name} {node.description}"
+    return _match_score(haystack, tokens)
+
+
+def _best_prepared_it_answer(question: str, nodes: List[Entity]) -> tuple[Entity | None, int]:
+    candidates = [
+        (_prepared_it_score(question, node), node)
+        for node in nodes
+        if node.entity_type == "PreparedITAnswer"
+    ]
+    candidates = [(score, node) for score, node in candidates if score >= PREPARED_IT_MIN_SCORE]
+    if not candidates:
+        return None, 0
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1], candidates[0][0]
+
+
+def _trusted_prepared_from_candidates(question: str, nodes: List[Entity]) -> tuple[Entity | None, int]:
+    prepared, score = _best_prepared_it_answer(question, nodes)
+    if prepared is None or score < PREPARED_IT_MIN_SCORE:
+        return None, score
+    return prepared, score
+
+
+def _find_exact_saved_answer(
+    question: str,
+    nodes: List[Entity],
+    relations: List[Relation],
+) -> tuple[str | None, str]:
+    question_norm = _normalize_question(question)
+    nodes_by_id = {str(node.id): node for node in nodes}
+
+    for node in nodes:
+        if node.entity_type != "UserQuery":
+            continue
+        saved_question = (node.description or "").replace("Пользовательский запрос:", "", 1).strip()
+        if _normalize_question(saved_question) != question_norm:
+            continue
+        for edge in relations:
+            if str(edge.subject_id) != str(node.id):
+                continue
+            answer_node = nodes_by_id.get(str(edge.object_id))
+            if answer_node and answer_node.entity_type == "StructuredAnswer":
+                return answer_node.description.strip(), f"exact_saved_qa:{answer_node.id}"
+
+    for node in nodes:
+        if node.entity_type != "AskExchange":
+            continue
+        saved_question = _extract_saved_question(node.description or "")
+        if saved_question and _normalize_question(saved_question) == question_norm:
+            answer = _extract_prepared_answer(node.description or "")
+            if answer:
+                return answer, f"exact_saved_exchange:{node.id}"
+
+    return None, ""
+
+
+def _format_saved_qa_answer(
+    saved_answer: str,
+    search_scope: Literal["local", "global"],
+    retrieval_source: str,
+) -> str:
+    return "\n".join(
+        [
+            "NO-LLM ответ из сохраненной базы",
+            f"Внутренний режим: {search_scope}; генерация LLM: выключена; поиск: {retrieval_source}.",
+            "",
+            saved_answer,
+        ]
+    )
+
+
+def _candidate_score(question: str, entities: List[Entity], relations: List[Relation]) -> int:
+    tokens = _tokenize(question)
+    if not tokens:
+        return 0
+    scores = [
+        _match_score(f"{node.entity_name} {node.entity_type} {node.description}", tokens)
+        for node in entities
+    ]
+    scores.extend(
+        _match_score(f"{edge.subject_name} {edge.object_name} {edge.relation_type} {edge.description}", tokens)
+        for edge in relations
+    )
+    return max(scores, default=0)
+
+
+def _format_no_reliable_context_answer(
+    question: str,
+    search_scope: Literal["local", "global"],
+    retrieval_source: str,
+    nodes_count: int,
+    edges_count: int,
+) -> str:
+    return "\n".join(
+        [
+            "NO-LLM шаблонный ответ",
+            f"Внутренний режим: {search_scope}; генерация LLM: выключена; поиск: {retrieval_source}.",
+            f"В графе сейчас: {nodes_count} сущностей, {edges_count} связей.",
+            "",
+            "Статус: в локальной базе не найдено достаточно релевантной IT-заготовки.",
+            "Я не буду подмешивать случайные старые package-результаты из графа в обычный вопрос.",
+            "Для генеративного ответа используйте /llm; для расширения no-LLM базы запустите scripts/seed_demo_it_knowledge.py.",
+            "",
+            f"Запрос: {question}",
+        ]
+    )
 
 
 async def build_no_llm_answer(question: str, search_scope: Literal["local", "global"]) -> str:
@@ -299,7 +521,28 @@ async def build_no_llm_answer(question: str, search_scope: Literal["local", "glo
     except Exception as exc:
         return f"NO-LLM режим включен. Временная ошибка чтения графа: {exc}"
 
+    prepared, prepared_score = _trusted_prepared_from_candidates(question, all_nodes)
+    if prepared is not None:
+        return _build_prepared_it_answer(prepared, search_scope, f"prepared_it_lexical:{prepared_score}")
+
+    saved_answer, saved_source = _find_exact_saved_answer(question, all_nodes, all_edges)
+    if saved_answer:
+        return _format_saved_qa_answer(saved_answer, search_scope, saved_source)
+
     entities, relations, retrieval_source = await _semantic_candidates(question)
+    prepared, prepared_score = _trusted_prepared_from_candidates(question, entities)
+    if prepared is not None:
+        return _build_prepared_it_answer(prepared, search_scope, f"{retrieval_source}:{prepared_score}")
+
+    if _candidate_score(question, entities, relations) < LEXICAL_MIN_SCORE:
+        return _format_no_reliable_context_answer(
+            question=question,
+            search_scope=search_scope,
+            retrieval_source=retrieval_source,
+            nodes_count=len(all_nodes),
+            edges_count=len(all_edges),
+        )
+
     title = "NO-LLM шаблонный семантический ответ"
     lines = [
         title,
@@ -341,6 +584,60 @@ async def build_no_llm_answer(question: str, search_scope: Literal["local", "glo
         ]
     )
     return "\n".join(lines)
+
+
+async def build_llm_general_answer(question: str, search_scope: Literal["local", "global"]) -> str:
+    if not state.raw_llm_client:
+        raise HTTPException(status_code=503, detail="LLM client is not ready")
+
+    context_source = "model"
+    context = ""
+    if state.knowledge_graph:
+        try:
+            nodes = await state.knowledge_graph.index.graph_backend.get_all_nodes()
+            prepared, prepared_score = _trusted_prepared_from_candidates(question, nodes)
+            if prepared is not None:
+                context_source = f"prepared_it_answer:{prepared_score}"
+                context = _extract_prepared_answer(prepared.description or "")
+        except Exception as exc:
+            print(f"Warning: prepared IT lookup failed: {exc}")
+
+    prompt = (
+        "Ответь на обычный IT-вопрос на русском языке. Если есть локальный контекст, опирайся на него. "
+        "Если локального контекста нет, дай аккуратный общий ответ как LLM. "
+        "Не копируй локальный контекст дословно: переформулируй его под вопрос пользователя, "
+        "добавь 1-3 полезные детали, но не противоречь локальному контексту. "
+        "Если вопрос просит конкретные файлы установки, версии пакетов или ссылки на скачивание, не выдумывай ссылки: "
+        "скажи, что для этого нужен package-запрос с продуктом, версией, ОС и format=deb|rpm|apk|exe.\n\n"
+        f"Вопрос:\n{question}\n\n"
+        f"Локальный контекст:\n{context or 'Нет достаточно точной записи в локальной IT-базе.'}"
+    )
+    response = await state.raw_llm_client.chat.completions.create(
+        model=os.getenv("LLM_MODEL_NAME"),
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты кратко и точно отвечаешь на IT-вопросы. "
+                    "Если дан локальный контекст, используй его как источник фактов, но формулируй ответ заново. "
+                    "Не выдумывай download URL и версии пакетов."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    generated = (response.choices[0].message.content or "").strip()
+    if not generated:
+        raise HTTPException(status_code=503, detail="LLM returned empty answer")
+    return "\n".join(
+        [
+            "LLM режим: общий IT-ответ",
+            f"Внутренний режим: {search_scope}; источник: {context_source}.",
+            "",
+            generated,
+        ]
+    )
 
 
 @asynccontextmanager
@@ -400,13 +697,22 @@ async def run_indexing(docs: List[str], source_desc: str):
     state.is_indexing = True
     try:
         print(f"Indexing {len(docs)} docs from {source_desc}...")
-        if _env_flag("DISABLE_LLM_ANSWERS", False):
-            entities, relations = build_fast_graph_from_docs(docs)
+        fast_docs, regular_docs = _split_fast_graph_docs(docs)
+
+        if fast_docs:
+            entities, relations = build_fast_graph_from_docs(fast_docs)
             await state.knowledge_graph.index.insert_entities(entities)
             if relations:
                 await state.knowledge_graph.index.insert_relations(relations)
-        else:
-            await state.knowledge_graph.build_from_docs(docs)
+
+        if regular_docs:
+            if _env_flag("DISABLE_LLM_ANSWERS", False):
+                entities, relations = build_fast_graph_from_docs(regular_docs)
+                await state.knowledge_graph.index.insert_entities(entities)
+                if relations:
+                    await state.knowledge_graph.index.insert_relations(relations)
+            else:
+                await state.knowledge_graph.build_from_docs(regular_docs)
         print(f"Indexing from {source_desc} finished.")
     except Exception as e:
         print(f"Indexing error: {e}")
@@ -420,13 +726,11 @@ async def ask_local(request: QueryRequest):
         answer = await build_no_llm_answer(request.question, "local")
         return {"answer": answer, "mode": "no_llm_semantic_local", "answer_mode": "no_llm"}
 
-    if not state.local_search_engine:
-        raise HTTPException(status_code=503, detail="Search engine not ready")
     try:
-        answer = await state.local_search_engine.a_query(request.question)
-        return {"answer": answer, "mode": "llm_local", "answer_mode": "llm"}
+        answer = await build_llm_general_answer(request.question, "local")
+        return {"answer": answer, "mode": "llm_general_local", "answer_mode": "llm"}
     except Exception as exc:
-        print(f"Warning: LLM local search failed, no-LLM fallback is used: {exc}")
+        print(f"Warning: LLM general answer failed, no-LLM fallback is used: {exc}")
         answer = await build_no_llm_answer(request.question, "local")
         return {"answer": answer, "mode": "llm_fallback_no_llm_local", "answer_mode": "no_llm"}
 
@@ -437,13 +741,11 @@ async def ask_global(request: QueryRequest):
         answer = await build_no_llm_answer(request.question, "global")
         return {"answer": answer, "mode": "no_llm_semantic_global", "answer_mode": "no_llm"}
 
-    if not state.global_search_engine:
-        raise HTTPException(status_code=503, detail="Search engine not ready")
     try:
-        answer = await state.global_search_engine.a_query(request.question)
-        return {"answer": answer, "mode": "llm_global", "answer_mode": "llm"}
+        answer = await build_llm_general_answer(request.question, "global")
+        return {"answer": answer, "mode": "llm_general_global", "answer_mode": "llm"}
     except Exception as exc:
-        print(f"Warning: LLM global search failed, no-LLM fallback is used: {exc}")
+        print(f"Warning: LLM general answer failed, no-LLM fallback is used: {exc}")
         answer = await build_no_llm_answer(request.question, "global")
         return {"answer": answer, "mode": "llm_fallback_no_llm_global", "answer_mode": "no_llm"}
 
@@ -502,10 +804,39 @@ async def answer_llm(request: BeautifyAnswerRequest):
 
 @app.get("/status")
 async def status():
+    components: dict[str, dict[str, str]] = {
+        "fastapi": {"status": "OK", "message": "service is running"},
+        "search_engine": {
+            "status": "OK" if state.knowledge_graph and state.local_search_engine else "WARN",
+            "message": "knowledge graph is initialized" if state.knowledge_graph else "knowledge graph is not ready",
+        },
+        "memgraph": {
+            "status": "OK" if state.knowledge_graph else "WARN",
+            "message": os.getenv("MEMGRAPH_URI", "bolt://memgraph:7687"),
+        },
+        "llm_formatter": {
+            "status": "WARN" if _env_flag("DISABLE_LLM_ANSWERS", False) else ("OK" if state.raw_llm_client else "FAIL"),
+            "message": (
+                "disabled by DISABLE_LLM_ANSWERS"
+                if _env_flag("DISABLE_LLM_ANSWERS", False)
+                else f"configured provider={_llm_provider()}"
+            ),
+        },
+    }
+    summary = "OK"
+    if any(item["status"] == "FAIL" for item in components.values()):
+        summary = "FAIL"
+    elif any(item["status"] == "WARN" for item in components.values()):
+        summary = "WARN"
     return {
+        "summary": summary,
         "is_indexing": state.is_indexing,
         "default_answer_mode": "no_llm" if _env_flag("DISABLE_LLM_ANSWERS", False) else "llm",
+        "llm_provider": _llm_provider(),
+        "llm_model": os.getenv("LLM_MODEL_NAME"),
+        "embedder_model": os.getenv("EMBEDDER_MODEL_NAME"),
         "embedding_dim": state.embedding_dim,
+        "components": components,
     }
 
 
