@@ -43,3 +43,11 @@ def test_route_llm_word_prefix() -> None:
     assert routed.mode == "local"
     assert routed.answer_mode == "llm"
     assert routed.question == "versions for debian 13"
+
+
+def test_route_db_only_command() -> None:
+    routed = route_mode_and_question("/db /llm versions for debian 13")
+    assert routed.db_only is True
+    assert routed.db_only_explicit is True
+    assert routed.answer_mode == "llm"
+    assert routed.question == "versions for debian 13"

@@ -68,3 +68,26 @@ def test_parse_versions_when_os_comes_before_product() -> None:
     assert q.product == "postgresql"
     assert q.os == "debian"
     assert q.os_version == "13"
+
+
+def test_parse_natural_language_filters() -> None:
+    q = parse_scenario_query("дай последнюю версию PostgreSQL для debian 13 с ресурса pgdg в количестве 10 штук покажи 5")
+    assert q is not None
+    assert q.scenario_type == "versions_by_os"
+    assert q.product == "postgresql"
+    assert q.os == "debian"
+    assert q.os_version == "13"
+    assert q.source_name == "pgdg"
+    assert q.sort_by == "newest"
+    assert q.limit == 10
+    assert q.show == 5
+
+
+def test_parse_context_rewritten_latest_product_version() -> None:
+    q = parse_scenario_query("product=redis latest version дай мне его последнюю версию show=1")
+    assert q is not None
+    assert q.scenario_type == "formats_by_version"
+    assert q.product == "redis"
+    assert q.package_version is None
+    assert q.sort_by == "newest"
+    assert q.show == 1

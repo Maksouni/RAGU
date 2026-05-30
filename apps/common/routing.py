@@ -12,6 +12,8 @@ _FLAG_RE = re.compile(r"^(local|global)\s*[:\-]\s*", re.IGNORECASE)
 _ANSWER_COMMAND_RE = re.compile(r"^/(llm|nollm|no_llm|no-llm)\b", re.IGNORECASE)
 _ANSWER_FLAG_RE = re.compile(r"^(llm|nollm|no_llm|no-llm)\s*[:\-]\s*", re.IGNORECASE)
 _ANSWER_WORD_PREFIX_RE = re.compile(r"^(llm|nollm|no_llm|no-llm)\s+", re.IGNORECASE)
+_DB_ONLY_COMMAND_RE = re.compile(r"^/(db|dbonly|db-only|offline|base)\b", re.IGNORECASE)
+_DB_ONLY_FLAG_RE = re.compile(r"^(db|dbonly|db-only|offline|base)\s*[:\-]\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,8 @@ class RoutedQuestion:
     mode_explicit: bool = False
     answer_mode: AnswerMode = "auto"
     answer_mode_explicit: bool = False
+    db_only: bool = False
+    db_only_explicit: bool = False
 
 
 def _normalize_answer_mode(value: str) -> AnswerMode:
@@ -41,12 +45,16 @@ def route_mode_and_question(
             mode_explicit=False,
             answer_mode=default_answer_mode,
             answer_mode_explicit=False,
+            db_only=False,
+            db_only_explicit=False,
         )
 
     mode: AskMode = default_mode
     answer_mode: AnswerMode = default_answer_mode
     mode_explicit = False
     answer_mode_explicit = False
+    db_only = False
+    db_only_explicit = False
 
     # Allow compact combinations such as:
     # /llm /global question, /global /nollm question, nollm global: question.
@@ -65,6 +73,13 @@ def route_mode_and_question(
             raw = raw[answer_command_match.end() :].strip()
             continue
 
+        db_only_command_match = _DB_ONLY_COMMAND_RE.match(raw)
+        if db_only_command_match:
+            db_only = True
+            db_only_explicit = True
+            raw = raw[db_only_command_match.end() :].strip()
+            continue
+
         flag_match = _FLAG_RE.match(raw)
         if flag_match:
             mode = flag_match.group(1).lower()  # type: ignore[assignment]
@@ -77,6 +92,13 @@ def route_mode_and_question(
             answer_mode = _normalize_answer_mode(answer_flag_match.group(1))
             answer_mode_explicit = True
             raw = raw[answer_flag_match.end() :].strip()
+            continue
+
+        db_only_flag_match = _DB_ONLY_FLAG_RE.match(raw)
+        if db_only_flag_match:
+            db_only = True
+            db_only_explicit = True
+            raw = raw[db_only_flag_match.end() :].strip()
             continue
 
         answer_word_prefix_match = _ANSWER_WORD_PREFIX_RE.match(raw)
@@ -94,4 +116,6 @@ def route_mode_and_question(
         mode_explicit=mode_explicit,
         answer_mode=answer_mode,
         answer_mode_explicit=answer_mode_explicit,
+        db_only=db_only,
+        db_only_explicit=db_only_explicit,
     )

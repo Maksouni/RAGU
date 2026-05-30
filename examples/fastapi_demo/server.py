@@ -139,6 +139,23 @@ def _extract_prepared_answer(description: str) -> str:
     return description.split(marker, 1)[1].strip()
 
 
+def _strip_saved_answer_headers(answer: str) -> str:
+    cleaned = re.sub(
+        r"^\s*LLM режим:.*?Внутренний режим:\s*[^.]+?\.\s*",
+        "",
+        answer.strip(),
+        flags=re.IGNORECASE | re.DOTALL,
+    ).strip()
+    lines = cleaned.splitlines()
+    while lines and (
+        not lines[0].strip()
+        or lines[0].startswith("LLM режим:")
+        or lines[0].startswith("Внутренний режим:")
+    ):
+        lines.pop(0)
+    return "\n".join(lines).strip() or answer.strip()
+
+
 def _build_prepared_it_answer(node: Entity, search_scope: Literal["local", "global"], retrieval_source: str) -> str:
     answer = _extract_prepared_answer(node.description or "")
     return "\n".join(
@@ -463,12 +480,13 @@ def _format_saved_qa_answer(
     search_scope: Literal["local", "global"],
     retrieval_source: str,
 ) -> str:
+    clean_answer = _strip_saved_answer_headers(saved_answer)
     return "\n".join(
         [
             "NO-LLM ответ из сохраненной базы",
             f"Внутренний режим: {search_scope}; генерация LLM: выключена; поиск: {retrieval_source}.",
             "",
-            saved_answer,
+            clean_answer,
         ]
     )
 
@@ -780,7 +798,7 @@ async def answer_llm(request: BeautifyAnswerRequest):
         "Ты помощник для поиска пакетов. На основе готовых структурированных данных "
         "сформируй красивый, но проверяемый ответ на русском языке. "
         "Не выдумывай версии, ссылки и источники. Сохрани фильтры, количество найденного "
-        "и 3-7 наиболее полезных ссылок, если они есть. "
+        "и лимит show из структурированных данных: не добавляй выдачу сверх того, что уже передано. "
         "Начни ответ строкой: LLM режим: генеративное оформление.\n\n"
         f"Вопрос пользователя:\n{request.question}\n\n"
         f"Структурированные данные:\n{structured[:6000]}"
@@ -789,7 +807,7 @@ async def answer_llm(request: BeautifyAnswerRequest):
         response = await state.raw_llm_client.chat.completions.create(
             model=os.getenv("LLM_MODEL_NAME"),
             messages=[
-                {"role": "system", "content": "Отвечай кратко, структурировано и только по предоставленным данным."},
+                {"role": "system", "content": "Отвечай кратко, структурировано и только по предоставленным данным. Не расширяй список версий или ссылок сверх переданного show-лимита."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,

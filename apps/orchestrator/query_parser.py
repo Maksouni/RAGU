@@ -39,6 +39,7 @@ _PRODUCT_FOR_OS_RE = re.compile(
 )
 _ANY_VERSION_RE = re.compile(r"(?P<version>\d+(?:\.\d+)+)")
 _VERSION_HINT_RE = re.compile(r"\b(верс\w*|version|versions)\b", re.IGNORECASE)
+_KNOWN_PRODUCT_RE = re.compile(r"\b(postgresql|postgres|python|redis|nginx|docker|kubernetes)\b", re.IGNORECASE)
 _LEADING_REQUEST_WORDS_RE = re.compile(
     r"^(?:дай|дайте|мне|найди|найдите|покажи|покажите|скачай|скачать|нужен|нужна|нужно|"
     r"список|все|всех|дай список|"
@@ -120,7 +121,7 @@ def _parse_sort(raw: str, params: dict[str, str]) -> Literal["newest", "oldest",
     if params.get("sort") in {"newest", "oldest", "name"}:
         return params["sort"]  # type: ignore[return-value]
     low = raw.lower()
-    if "по новизне" in low or "сначала новые" in low or "newest" in low:
+    if any(marker in low for marker in ("по новизне", "сначала новые", "newest", "последн", "новейш", "свеж")):
         return "newest"
     if "сначала старые" in low or "oldest" in low:
         return "oldest"
@@ -129,26 +130,51 @@ def _parse_sort(raw: str, params: dict[str, str]) -> Literal["newest", "oldest",
     return "newest"
 
 
-def _parse_limit(params: dict[str, str]) -> int:
+def _parse_limit(raw_text: str, params: dict[str, str]) -> int:
     raw = params.get("limit")
-    if not raw:
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            return 30
+        return max(1, min(100, value))
+
+    match = re.search(
+        r"(?:в\s+количестве|количеством|количество|limit)\s*(?:=|:)?\s*(?P<count>\d{1,3})|(?P<pieces>\d{1,3})\s*(?:штук|шт\b)",
+        raw_text.lower(),
+        re.IGNORECASE,
+    )
+    if not match:
         return 30
-    try:
-        value = int(raw)
-    except ValueError:
-        return 30
+    value = int(match.group("count") or match.group("pieces"))
     return max(1, min(100, value))
 
 
-def _parse_show(params: dict[str, str]) -> int:
+def _parse_show(raw_text: str, params: dict[str, str]) -> int:
     raw = params.get("show")
-    if not raw:
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            return 5
+        return max(1, min(50, value))
+
+    match = re.search(r"(?:show|покажи|выведи|отобрази)\s*(?:=|:)?\s*(?P<count>\d{1,2})", raw_text.lower(), re.IGNORECASE)
+    if not match:
         return 5
-    try:
-        value = int(raw)
-    except ValueError:
-        return 5
+    value = int(match.group("count"))
     return max(1, min(50, value))
+
+
+def _parse_source_name(raw_text: str, params: dict[str, str]) -> str | None:
+    if params.get("source"):
+        return params["source"]
+    match = re.search(
+        r"(?:с|из)\s+(?:ресурса|источника|source)\s+(?P<source>[a-zA-Z0-9_.-]+)",
+        raw_text.lower(),
+        re.IGNORECASE,
+    )
+    return match.group("source") if match else None
 
 
 def _parse_format(raw: str, params: dict[str, str]) -> PackageFormat | None:
@@ -168,8 +194,12 @@ def _parse_product(raw: str, params: dict[str, str]) -> str:
     low = raw.lower()
     if "postgresql" in low:
         return "postgresql"
+    if re.search(r"\bpostgres\b", low):
+        return "postgresql"
     if "python" in low:
         return "python"
+    if "redis" in low:
+        return "redis"
     cleaned = re.sub(r"\b[a-z_]+\s*=\s*[a-z0-9._-]+\b", " ", low, flags=re.IGNORECASE)
     cleaned = _OS_PHRASE_RE.sub(" ", cleaned)
     cleaned = _KNOWN_OS_RE.sub(" ", cleaned)
@@ -204,10 +234,10 @@ def parse_scenario_query(text: str) -> ScenarioQuery | None:
 
     params = _extract_filter_params(raw)
     sort_by = _parse_sort(raw, params)
-    limit = _parse_limit(params)
-    show = _parse_show(params)
+    limit = _parse_limit(raw, params)
+    show = _parse_show(raw, params)
     package_format = _parse_format(raw, params)
-    source_name = params.get("source")
+    source_name = _parse_source_name(raw, params)
     product = _parse_product(raw, params)
     os_name, os_version = _extract_os(raw, params)
 
@@ -245,6 +275,20 @@ def parse_scenario_query(text: str) -> ScenarioQuery | None:
     if _VERSION_HINT_RE.search(raw) and os_name:
         return ScenarioQuery(
             scenario_type="versions_by_os",
+            product=product,
+            os=os_name,
+            os_version=os_version,
+            package_format=package_format,
+            source_name=source_name,
+            sort_by=sort_by,
+            limit=limit,
+            show=show,
+            raw_query=raw,
+        )
+
+    if _VERSION_HINT_RE.search(raw) and (params.get("product") or _KNOWN_PRODUCT_RE.search(raw)):
+        return ScenarioQuery(
+            scenario_type="formats_by_version",
             product=product,
             os=os_name,
             os_version=os_version,

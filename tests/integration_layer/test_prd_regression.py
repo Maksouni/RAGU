@@ -61,13 +61,27 @@ class CachedOutbox(FakeOutbox):
 @dataclass
 class FakeScenarioManager:
     answer: str = "NO-LLM шаблонный ответ\nСценарий: пакеты python 3.12\nРезультаты:\n- deb: 1 пакетов"
+    calls: list[dict[str, str]] | None = None
 
     async def handle_if_supported(self, question: str, requested_mode: str, answer_mode: str) -> ScenarioResult:
+        if self.calls is not None:
+            self.calls.append({"question": question, "requested_mode": requested_mode, "answer_mode": answer_mode})
         return ScenarioResult(
             handled=True,
             answer=self.answer if answer_mode == "no_llm" else self.answer.replace("NO-LLM шаблонный ответ", "LLM режим: подготовленный контекст"),
             metadata={"artifacts_count": 1, "answer_mode_seen": answer_mode},
         )
+
+
+class ContextOutbox(FakeOutbox):
+    def __init__(self, previous: AskExchangeEvent) -> None:
+        super().__init__()
+        self.previous = previous
+
+    def find_recent_context(self, *, chat_id: str, user_id: str, max_scan: int = 50):  # noqa: ANN201
+        if self.previous.chat_id == chat_id and self.previous.user_id == user_id:
+            return self.previous
+        return None
 
 
 @pytest.mark.asyncio
@@ -92,6 +106,128 @@ async def test_nollm_python_312_ubuntu_limit_10_uses_template_without_llm() -> N
     assert result.answer.startswith("NO-LLM шаблонный ответ")
     assert api.beautify_calls == []
     assert outbox.events[0].metadata["answer_mode"] == "no_llm"
+
+
+@pytest.mark.asyncio
+async def test_db_only_command_skips_registry_scraper_and_llm() -> None:
+    api = FakeApiClient()
+    calls: list[dict[str, str]] = []
+    outbox = FakeOutbox()
+    orchestrator = AskOrchestrator(
+        settings=IntegrationSettings(),
+        api_client=api,  # type: ignore[arg-type]
+        outbox=outbox,  # type: ignore[arg-type]
+        scenario_manager=FakeScenarioManager(calls=calls),  # type: ignore[arg-type]
+    )
+
+    result = await orchestrator.handle_user_message(
+        raw_text="/db /llm Python 3.12 for Ubuntu limit=10",
+        chat_id="chat",
+        user_id="user",
+        correlation_id="corr",
+    )
+
+    assert result.answer_mode == "no_llm"
+    assert calls == []
+    assert api.beautify_calls == []
+    assert api.ask_calls == [{"question": "Python 3.12 for Ubuntu limit=10", "mode": "local", "answer_mode": "no_llm"}]
+    assert outbox.events[0].metadata["db_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_followup_query_uses_previous_dialog_context_for_package_parser() -> None:
+    previous = AskExchangeEvent(
+        event_id="previous-event",
+        question="versions PostgreSQL for debian 13",
+        answer="previous answer",
+        mode="local",
+        user_id="user",
+        chat_id="chat",
+        correlation_id="old",
+    )
+    calls: list[dict[str, str]] = []
+    orchestrator = AskOrchestrator(
+        settings=IntegrationSettings(),
+        api_client=FakeApiClient(),  # type: ignore[arg-type]
+        outbox=ContextOutbox(previous),  # type: ignore[arg-type]
+        scenario_manager=FakeScenarioManager(calls=calls),  # type: ignore[arg-type]
+    )
+
+    result = await orchestrator.handle_user_message(
+        raw_text="/nollm latest version of it show=1",
+        chat_id="chat",
+        user_id="user",
+        correlation_id="new",
+    )
+
+    assert result.answer_mode == "no_llm"
+    assert calls
+    assert calls[0]["question"] == "product=postgresql latest version latest version of it show=1"
+
+
+@pytest.mark.asyncio
+async def test_russian_followup_query_uses_previous_dialog_context() -> None:
+    previous = AskExchangeEvent(
+        event_id="previous-event",
+        question="версии PostgreSQL для debian 13",
+        answer="previous answer",
+        mode="local",
+        user_id="user",
+        chat_id="chat",
+        correlation_id="old",
+    )
+    calls: list[dict[str, str]] = []
+    orchestrator = AskOrchestrator(
+        settings=IntegrationSettings(),
+        api_client=FakeApiClient(),  # type: ignore[arg-type]
+        outbox=ContextOutbox(previous),  # type: ignore[arg-type]
+        scenario_manager=FakeScenarioManager(calls=calls),  # type: ignore[arg-type]
+    )
+
+    result = await orchestrator.handle_user_message(
+        raw_text="/nollm дай последнюю версию этого файла show=1",
+        chat_id="chat",
+        user_id="user",
+        correlation_id="new",
+    )
+
+    assert result.answer_mode == "no_llm"
+    assert calls
+    assert calls[0]["question"] == "product=postgresql latest version дай последнюю версию этого файла show=1"
+
+
+@pytest.mark.asyncio
+async def test_redis_latest_followup_uses_previous_subject_instead_of_general_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISABLE_LLM_ANSWERS", "false")
+    previous = AskExchangeEvent(
+        event_id="previous-event",
+        question="что такое redis?",
+        answer="Redis - это in-memory key-value database.",
+        mode="local",
+        user_id="user",
+        chat_id="chat",
+        correlation_id="old",
+    )
+    calls: list[dict[str, str]] = []
+    api = FakeApiClient()
+    orchestrator = AskOrchestrator(
+        settings=IntegrationSettings(),
+        api_client=api,  # type: ignore[arg-type]
+        outbox=ContextOutbox(previous),  # type: ignore[arg-type]
+        scenario_manager=FakeScenarioManager(calls=calls),  # type: ignore[arg-type]
+    )
+
+    result = await orchestrator.handle_user_message(
+        raw_text="дай мне его последнюю версию",
+        chat_id="chat",
+        user_id="user",
+        correlation_id="new",
+    )
+
+    assert result.answer_mode == "llm"
+    assert calls
+    assert calls[0]["question"] == "product=redis latest version дай мне его последнюю версию"
+    assert api.ask_calls == []
 
 
 @pytest.mark.asyncio

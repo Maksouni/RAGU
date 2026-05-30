@@ -80,3 +80,23 @@ async def test_orchestrator_returns_fast_unsupported_answer_for_unconfigured_sou
     assert result.response_mode == "registry_scrape_local"
     assert "Источник данных не настроен" in result.answer
     assert "похожие старые ответы" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_treats_context_rewritten_redis_latest_as_package_request() -> None:
+    orchestrator = AskOrchestrator(
+        settings=IntegrationSettings(),
+        api_client=FailingApiClient(),  # type: ignore[arg-type]
+        outbox=FakeOutbox(),  # type: ignore[arg-type]
+    )
+
+    result = await orchestrator.handle_user_message(
+        raw_text="/llm product=redis latest version дай мне его последнюю версию",
+        chat_id="chat",
+        user_id="user",
+        correlation_id="corr",
+    )
+
+    assert result.response_mode == "registry_scrape_local"
+    assert "product=redis" in result.answer
+    assert "Источник данных не настроен" in result.answer

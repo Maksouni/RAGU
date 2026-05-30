@@ -243,6 +243,29 @@ class OutboxRepository:
                 return event
         return None
 
+    def find_recent_context(
+        self,
+        *,
+        chat_id: str,
+        user_id: str,
+        max_scan: int = 50,
+    ) -> AskExchangeEvent | None:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM outbox_events
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (max_scan,),
+            ).fetchall()
+        for row in rows:
+            event = AskExchangeEvent.model_validate(json.loads(row["payload_json"]))
+            if event.chat_id == chat_id and event.user_id == user_id:
+                return event
+        return None
+
     @staticmethod
     def _normalize_question(question: str) -> str:
         return " ".join((question or "").strip().lower().split())

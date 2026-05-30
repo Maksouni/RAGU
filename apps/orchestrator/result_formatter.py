@@ -6,6 +6,8 @@ from typing import Callable
 from apps.orchestrator.query_parser import ScenarioQuery
 from apps.scraper.models import PackageArtifact
 
+VERSION_EXAMPLES_PER_VERSION = 1
+
 
 def _deduplicate(artifacts: list[PackageArtifact]) -> list[PackageArtifact]:
     seen = set()
@@ -56,6 +58,13 @@ def _limit_visible_items(query: ScenarioQuery, items: list[PackageArtifact]) -> 
     return items[: query.show]
 
 
+def _visible_versions(query: ScenarioQuery, by_version: dict[str, list[PackageArtifact]]) -> list[str]:
+    versions = sorted(by_version.keys(), key=_version_key, reverse=query.sort_by != "oldest")
+    if not query.show:
+        return versions
+    return versions[: query.show]
+
+
 def _style_label(answer_mode: str) -> str:
     return (
         "LLM режим: подготовленный контекст для генеративного оформления"
@@ -89,15 +98,11 @@ def format_scenario_answer(
         )
 
     if query.scenario_type == "versions_by_os":
-        visible_items = _limit_visible_items(query, items)
         by_version = defaultdict(list)
         for item in items:
             by_version[item.package_version].append(item)
-        visible_by_version = defaultdict(list)
-        for item in visible_items:
-            visible_by_version[item.package_version].append(item)
         versions = sorted(by_version.keys(), key=_version_key, reverse=query.sort_by != "oldest")
-        visible_versions = [version for version in versions if visible_by_version.get(version)]
+        visible_versions = _visible_versions(query, by_version)
         if answer_mode == "llm":
             lines = [
                 label,
@@ -117,10 +122,13 @@ def format_scenario_answer(
                 "Результаты:",
             ]
         for version in visible_versions:
-            examples = visible_by_version[version]
+            examples = by_version[version][:VERSION_EXAMPLES_PER_VERSION]
             lines.append(f"- {version}: пакетов {len(by_version[version])}")
             for ex in examples:
                 lines.append(f"  {ex.package_name} -> {ex.artifact_url}")
+            hidden_count = len(by_version[version]) - len(examples)
+            if hidden_count > 0:
+                lines.append(f"  ... еще {hidden_count} пакетов этой версии скрыто.")
             if len(lines) >= max_lines:
                 lines.append("... ответ сокращен, данных больше.")
                 break

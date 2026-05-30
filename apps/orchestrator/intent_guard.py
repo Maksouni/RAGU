@@ -13,7 +13,7 @@ INVALID_QUERY_MESSAGE = (
     "- дай список всех пакетов PostgreSQL 17.6\n"
     "- Python 3.12 для Ubuntu limit=10\n\n"
     "Можно добавить фильтры: format=deb|rpm|apk|exe, source=<часть имени>, "
-    "sort=newest|oldest|name, limit=10, show=5."
+    "sort=newest|oldest|name, limit=10, show=5. Для строгого поиска только по базе используйте /db."
 )
 
 _VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+\b")

@@ -19,6 +19,10 @@ def _package_lines(answer: str) -> list[str]:
     return [line for line in answer.splitlines() if " -> " in line and line.startswith("  ")]
 
 
+def _version_lines(answer: str) -> list[str]:
+    return [line for line in answer.splitlines() if line.startswith("- ")]
+
+
 def test_show_limits_total_packages_across_formats() -> None:
     query = parse_scenario_query("дай список всех пакетов PostgreSQL 17.6 limit=10 show=4")
     assert query is not None
@@ -50,3 +54,21 @@ def test_show_limits_total_packages_across_versions() -> None:
     answer = format_scenario_answer(query, artifacts)
 
     assert len(_package_lines(answer)) == 3
+
+
+def test_show_limits_visible_versions_not_packages() -> None:
+    query = parse_scenario_query("versions PostgreSQL for ubuntu limit=20 show=5")
+    assert query is not None
+    artifacts = []
+    for version_idx in range(1, 8):
+        artifacts.extend(
+            [
+                _artifact(version_idx * 10 + 1, "deb", f"17.{version_idx}"),
+                _artifact(version_idx * 10 + 2, "deb", f"17.{version_idx}"),
+            ]
+        )
+
+    answer = format_scenario_answer(query, artifacts)
+
+    assert len(_version_lines(answer)) == 5
+    assert len(_package_lines(answer)) == 5

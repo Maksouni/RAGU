@@ -13,6 +13,35 @@ from apps.scraper.service import PackageScraperService
 logger = logging.getLogger(__name__)
 
 
+def _normalize_product(value: str) -> str:
+    product = value.strip().lower()
+    if product == "postgres":
+        return "postgresql"
+    return product
+
+
+def _template_matches_product(template_product: str, requested_product: str) -> bool:
+    hint = _normalize_product(template_product)
+    requested = _normalize_product(requested_product)
+    return requested == hint or requested in hint or hint in requested
+
+
+def _filter_templates_for_query(templates: list, product: str, source_name: str | None) -> list:
+    filtered = [
+        template
+        for template in templates
+        if _template_matches_product(template.product_hint, product)
+    ]
+    if source_name:
+        source = source_name.strip().lower()
+        filtered = [
+            template
+            for template in filtered
+            if source in template.source_name.lower() or source in template.template_id.lower()
+        ]
+    return filtered
+
+
 class ScenarioResult(BaseModel):
     handled: bool
     answer: str = ""
@@ -80,6 +109,12 @@ class ScenarioManager:
                 templates = [t for t in templates if (t.os_version or "").lower() in {osv, "*", ""}]
             if scenario_query.package_format:
                 templates = [t for t in templates if t.package_format == scenario_query.package_format]
+
+        templates = _filter_templates_for_query(
+            templates,
+            product=scenario_query.product,
+            source_name=scenario_query.source_name,
+        )
 
         if not templates:
             return ScenarioResult(
