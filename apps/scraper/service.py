@@ -8,7 +8,7 @@ import httpx
 from apps.registry.models import RepositoryTemplate
 from apps.scraper.models import PackageArtifact
 from apps.scraper.parsers import (
-    parse_apk_index,
+    parse_deb_packages_index,
     parse_deb_html_listing,
     parse_exe_html_listing,
     parse_rpm_html_listing,
@@ -41,9 +41,26 @@ class PackageScraperService:
     ) -> list[PackageArtifact]:
         self._last_errors.pop(template.template_id, None)
         try:
-            if template.parser_type in {"deb_html", "rpm_html", "exe_html"}:
+            if template.parser_type in {"deb_html", "deb_packages_gz", "rpm_html", "exe_html"}:
                 assert template.list_url and template.base_url and template.source_url
                 response = await self._get_with_retry(template.list_url, template.template_id)
+                if template.parser_type == "deb_packages_gz":
+                    package_names = [
+                        item.strip()
+                        for item in template.metadata.get("package_names", "").split(",")
+                        if item.strip()
+                    ]
+                    return parse_deb_packages_index(
+                        data=response.content,
+                        base_url=template.base_url,
+                        source_name=template.source_name,
+                        source_url=template.source_url,
+                        product=product,
+                        os_name=template.os,
+                        os_version=template.os_version,
+                        requested_version=requested_version,
+                        package_names=package_names or None,
+                    )
                 html = response.text
                 if template.parser_type == "deb_html":
                     return parse_deb_html_listing(
@@ -78,19 +95,6 @@ class PackageScraperService:
                     requested_version=requested_version,
                 )
 
-            if template.parser_type == "apk_index":
-                assert template.list_url and template.base_url and template.source_url
-                response = await self._get_with_retry(template.list_url, template.template_id)
-                return parse_apk_index(
-                    apkindex_tar_gz=response.content,
-                    base_url=template.base_url,
-                    source_name=template.source_name,
-                    source_url=template.source_url,
-                    product=product,
-                    os_name=template.os,
-                    os_version=template.os_version,
-                    requested_version=requested_version,
-                )
         except Exception as exc:
             self._last_errors[template.template_id] = str(exc)[:500]
             logger.exception(

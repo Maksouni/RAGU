@@ -5,7 +5,6 @@
 #   .\venv\Scripts\python.exe -m pip install -e .
 
 # Core RAGU/library dependencies
-aiogram>=3.22.0
 aiolimiter>=1.2.1
 apscheduler>=3.11.1
 graspologic>=3.4.4

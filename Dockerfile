@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY ragu ./ragu
+COPY apps ./apps
 COPY tests ./tests
 
 # install project

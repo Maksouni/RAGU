@@ -53,8 +53,8 @@ def _format_unsupported_sources_answer(question: str, product: str, os_name: str
         "Источник данных не настроен для этого запроса.\n\n"
         f"Запрос: {question}\n"
         f"Распознано: product={product}, os={os_name or '*'}, format={package_format or '*'}.\n\n"
-        "Сейчас в демо настроены источники для PostgreSQL/Python и серверных репозиториев "
-        "Debian, Ubuntu, RHEL, Alpine и python.org.\n"
+        "Сейчас в демо настроены источники для PostgreSQL, Redis, MySQL, MariaDB, SQLite, Python, Go, Node.js, Ruby, PHP, OpenJDK, Rust "
+        "и серверных репозиториев Debian, Ubuntu, RHEL, python.org и MongoDB APT.\n"
         "Для этого продукта, ОС или формата нет подключенного registry-шаблона, поэтому я не буду "
         "подбирать похожие старые ответы из графа."
     )

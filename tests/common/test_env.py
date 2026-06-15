@@ -18,9 +18,10 @@ _ALL_ENV_KEYS = [
 
 
 @pytest.fixture(autouse=True)
-def clean_ragu_env(monkeypatch):
+def clean_ragu_env(monkeypatch, tmp_path):
     for key in _ALL_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
 
 
 def test_env_loads_required_and_optional_fields_from_os_env(monkeypatch):

@@ -1,102 +1,106 @@
-
 <h1 align="center">RAGU: Retrieval-Augmented Graph Utility</h1>
 
 ---
 
 <p align="center">
-<img src="assets/ragu_image.jpg" alt="RAGU logo" width="600" />
+<img src="assets/ragu_image.jpg" alt="Логотип RAGU" width="600" />
 </p>
 
 <h4 align="center">
   <a href="https://github.com/AsphodelRem/RAGU/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="RAGU is under the MIT license." alt="RAGU"/>
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="RAGU распространяется по лицензии MIT." />
   </a>
-  <img src="https://img.shields.io/badge/python->=3.10-blue">
+  <img src="https://img.shields.io/badge/python->=3.10-blue" alt="Python >= 3.10" />
 </h4>
 
 <h4 align="center">
-  <a href="#install">Install</a> |
-  <a href="#quickstart">Quickstart</a> 
+  <a href="#установка">Установка</a> |
+  <a href="#быстрый-старт">Быстрый старт</a>
 </h4>
 
 ---
 
+## Обзор
 
-## Overview
-RAGU provides a pipeline for building a **Knowledge Graph**, and performing retrieve over the indexed data. It contains different approaches to extract structured data from raw texts to enable efficient question-answering over structured knowledge.
+RAGU предоставляет пайплайн для построения **графа знаний** и поиска по проиндексированным данным. Проект содержит несколько подходов к извлечению структурированных сущностей и связей из обычных текстов, чтобы на их основе можно было отвечать на вопросы по накопленному знанию.
 
-Partially based on [nano-graphrag](https://github.com/gusye1234/nano-graphrag/tree/main)
+Проект частично основан на [nano-graphrag](https://github.com/gusye1234/nano-graphrag/tree/main).
 
-Our huggingface community is [here](https://huggingface.co/RaguTeam/)
+Сообщество на Hugging Face: [RaguTeam](https://huggingface.co/RaguTeam/).
 
 ---
 
-## Diploma Demo Runbook
+## Демо для дипломного проекта
 
-The current local demo is a package-search integration built around RAGU, Memgraph, Telegram/VK, Ollama, and Google Sheets.
+Текущий локальный стенд демонстрирует интеграционный сервис поиска программных пакетов вокруг RAGU, Memgraph, FastAPI, Ollama, VK и Google Sheets.
 
-Primary runbook: [docs/LOCAL_OLLAMA_STACK.md](docs/LOCAL_OLLAMA_STACK.md)
-Safe config template: [.env.example](.env.example)
+Основной runbook: [docs/LOCAL_OLLAMA_STACK.md](docs/LOCAL_OLLAMA_STACK.md)  
+Безопасный шаблон конфигурации: [.env.example](.env.example)
 
-Key behavior:
+Ключевое поведение:
 
-- `BOT_PLATFORM=telegram|vk|both|none` controls which bot entrypoints are started by `scripts/start_ollama_stack.ps1`.
-- `LLM_PROVIDER=ollama|mistral|custom` selects local Ollama, Mistral API, or another OpenAI-compatible endpoint.
-- Package queries use the parser/registry/scraper pipeline first.
-- General IT questions, for example about Docker, PostgreSQL, Git, APIs, embeddings, or bots, route to local semantic/graph search.
-- `/llm <query>` uses the prepared package or graph context, then asks the LLM to format it.
-- `/nollm <query>` returns a deterministic template/semantic answer and does not require an LLM.
-- Plain queries use `.env`: `DISABLE_LLM_ANSWERS=true` means default no-LLM, `false` means default LLM formatting.
-- The LLM does not scrape, browse, or search sources by itself. It only formats structured data already collected by Python code.
-- Embeddings are independent from the answer mode. Local demo vectors are capped at `EMBEDDING_DIM <= 20`.
-- Google Sheets sync uses `GOOGLE_SERVICE_ACCOUNT_JSON_PATH`; keep the service account JSON outside git and share the sheet with that service account email.
+- Docker Compose запускает Memgraph, FastAPI, orchestrator и опциональные сервисы Sheets/VK.
+- Ollama остается локальным сервисом на хосте и отдает контейнерам OpenAI-совместимый endpoint.
+- `VK_BOT_ENABLED=true|false` управляет опциональным профилем VK-бота.
+- Запросы по пакетам сначала проходят через parser/registry/scraper pipeline.
+- Обычные IT-вопросы про Docker, PostgreSQL, Git, API, embeddings или поведение VK-бота маршрутизируются в локальный семантический поиск по графу.
+- `/llm <запрос>` берет подготовленный пакетный или графовый контекст и просит локальную LLM оформить ответ.
+- `/nollm <запрос>` возвращает детерминированный шаблонный или семантический ответ без генерации LLM.
+- Для обычных запросов используется настройка `.env`: `DISABLE_LLM_ANSWERS=true` включает no-LLM по умолчанию, `false` включает LLM-оформление.
+- LLM не скрейпит, не открывает сайты и не ищет источники самостоятельно. Она только оформляет структурированные данные, которые уже собрал Python-код.
+- Поддерживаемые форматы пакетов: `deb`, `rpm`, `exe`.
+- Подготовленные IT-ответы загружаются только явной командой через `/ingest/json`.
 
-For a lighter laptop run, set `LLM_PROVIDER=mistral`, `MISTRAL_API_KEY`, `BASE_URL=https://api.mistral.ai/v1`, `EMBEDDING_BASE_URL=https://api.mistral.ai/v1`, `LLM_MODEL_NAME=mistral-small-latest`, and `EMBEDDER_MODEL_NAME=mistral-embed`. The local graph, parser, scraper, bots, Memgraph, and Sheets flow stay the same.
-
-Useful local commands:
+Полезные локальные команды:
 
 ```powershell
 .\scripts\start_ollama_stack.ps1
 .\venv\Scripts\python.exe scripts\check_demo_health.py
 .\venv\Scripts\python.exe scripts\check_google_sheets.py
+.\venv\Scripts\python.exe scripts\seed_demo_it_knowledge.py --api-base-url http://127.0.0.1:8000
 .\scripts\stop_ollama_stack.ps1
 ```
 
-Demo bot queries:
+Примеры запросов для демонстрации:
 
 ```text
 /nollm Python 3.12 для Ubuntu limit=10
 /llm дай список всех пакетов PostgreSQL 17.6 limit=13 show=4
+покажи последние версии postgresql для ubuntu 24 выведи 5
 скачай Foo Package для Solaris format=deb
 ```
 
-The unsupported-source query should return a clear message and must not reuse old graph answers as if they were successful results.
+Запрос с неподдерживаемым источником должен возвращать понятное сообщение об ошибке и не должен переиспользовать старые ответы из графа как успешный результат.
 
 ---
 
-## Install
-Better way is a local build:
+## Установка
+
+Рекомендуемый вариант для разработки - локальная установка из исходников:
+
 ```commandline
 git clone https://github.com/AsphodelRem/RAGU.git
 cd RAGU
 uv pip install -e .
 ```
 
-From pypi:
+Установка из PyPI:
+
 ```bash
 pip install graph_ragu
 ```
 
-If you want to use local models (via transformers etc), run:
+Если нужны локальные модели через `transformers` и смежные зависимости:
+
 ```bash
 pip install graph_ragu[local]
 ```
 
 ---
 
-## Quickstart
+## Быстрый старт
 
-### Simple example of building knowledge graph
+### Простой пример построения графа знаний
 
 ```python
 import asyncio
@@ -113,7 +117,7 @@ from ragu.embedder import OpenAIEmbedder
 
 from ragu.utils.ragu_utils import read_text_from_files
 
-# Configuration (or use ragu.Env for loading from .env)
+# Конфигурация. Вместо констант можно загрузить значения через ragu.Env из .env.
 LLM_MODEL_NAME = "openai/gpt-4o-mini"
 LLM_BASE_URL = "https://api.openai.com/v1"
 LLM_API_KEY = "your-api-key-here"
@@ -122,17 +126,17 @@ EMBEDDER_MODEL_NAME = "text-embedding-3-large"
 
 
 async def main():
-    # Configure working directory and language
+    # Настройка рабочей директории и языка.
     Settings.storage_folder = "ragu_working_dir"
-    Settings.language = "english"  # or "russian"
+    Settings.language = "russian"
 
-    # Load documents from folder
+    # Загрузка документов из папки.
     docs = read_text_from_files("path/to/your/data")
 
-    # Initialize chunker
+    # Инициализация chunker.
     chunker = SimpleChunker(max_chunk_size=1000)
 
-    # Set up LLM client
+    # Клиент LLM.
     client = OpenAIClient(
         model_name=LLM_MODEL_NAME,
         base_url=LLM_BASE_URL,
@@ -142,13 +146,13 @@ async def main():
         cache_flush_every=10,
     )
 
-    # Set up artifact extractor
+    # Извлекатель артефактов.
     artifact_extractor = ArtifactsExtractorLLM(
         client=client,
         do_validation=False
     )
 
-    # Initialize embedder
+    # Embedder.
     embedder = OpenAIEmbedder(
         model_name=EMBEDDER_MODEL_NAME,
         base_url=LLM_BASE_URL,
@@ -159,13 +163,13 @@ async def main():
         use_cache=True,
     )
 
-    # Configure builder settings
+    # Настройки построения графа.
     builder_settings = BuilderArguments(
         use_llm_summarization=True,
         vectorize_chunks=True,
     )
 
-    # Build knowledge graph
+    # Построение графа знаний.
     knowledge_graph = await KnowledgeGraph(
         client=client,
         embedder=embedder,
@@ -179,13 +183,13 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-> If you run the code with a storage folder that already contains a knowledge graph, RAGU will automatically load the existing graph.
+> Если рабочая директория уже содержит граф знаний, RAGU автоматически загрузит существующее состояние.
 
+### Пример запроса
 
-### Example of querying
+**Local search**  
+Ищет по сущностям, найденным для запроса, и по связанному с ними контексту: relations, summaries и chunks.
 
-**Local search**
-Search over entities retrieved for the query and their connected context (relations, summaries, and chunks).
 ```python
 from ragu import LocalSearchEngine
 
@@ -195,12 +199,14 @@ local_search = LocalSearchEngine(
     embedder,
     tokenizer_model="gpt-4o-mini",
 )
-local_answer = await local_search.a_query("Who wrote Romeo and Juliet?")
+local_answer = await local_search.a_query("Кто написал Ромео и Джульетту?")
 print(local_answer)
 ```
 
 #### Global search
-Give an answer by community summaries.
+
+Формирует ответ на основе summary-сообществ графа.
+
 ```python
 from ragu import GlobalSearchEngine
 
@@ -208,11 +214,12 @@ global_search = GlobalSearchEngine(
     client=client,
     knowledge_graph=knowledge_graph,
 )
-global_answer = await global_search.a_query("Your broad query here")
+global_answer = await global_search.a_query("Ваш широкий запрос")
 print(global_answer)
 ```
 
 **Naive search (vector RAG):**
+
 ```python
 from ragu import NaiveSearchEngine
 
@@ -221,52 +228,54 @@ naive_search = NaiveSearchEngine(
     knowledge_graph=knowledge_graph,
     embedder=embedder,
 )
-naive_answer = await naive_search.a_query("Your query here")
+naive_answer = await naive_search.a_query("Ваш запрос")
 print(naive_answer)
 ```
 
-### Query planning wrapper
-Decomposes complex questions into dependent subqueries, executes them in order, and uses intermediate answers to produce a final response.
+### Обертка query planning
+
+`QueryPlanEngine` разбивает сложный вопрос на зависимые подзапросы, выполняет их по порядку и использует промежуточные ответы для финального результата.
+
 ```python
 from ragu import QueryPlanEngine
 
-# Wrap any base engine
+# Оберните любой базовый engine.
 planned_local = QueryPlanEngine(local_search)
-result = await planned_local.a_query("What is the capital of France?")
+result = await planned_local.a_query("Какая столица Франции?")
 print(result)
 
 planned_global = QueryPlanEngine(global_search)
-result = await planned_global.a_query("Your broad query here")
+result = await planned_global.a_query("Ваш широкий запрос")
 print(result)
 
 planned_naive = QueryPlanEngine(naive_search)
-result = await planned_naive.a_query("Your query here")
+result = await planned_naive.a_query("Ваш запрос")
 print(result)
 ```
 
 ---
 
-### Advanced Configuration
+### Расширенная конфигурация
 
-#### Builder Settings
+#### Настройки builder
 
-Configure the knowledge graph building pipeline using `BuilderSettings`:
+Пайплайн построения графа знаний настраивается через `BuilderArguments`:
 
 ```python
 from ragu import BuilderArguments
 
 builder_arguments = BuilderArguments(
-    use_llm_summarization=True,  # Enable LLM-based entity/relation summarization
-    use_clustering=False,  # Apply clustering before summarization. Use it if your text contains many similar entities.
-    build_only_vector_context=False,  # Skip graph extraction, only chunk embeddings
-    make_community_summary=True,  # Generate community summaries 
-    remove_isolated_nodes=True,  # Remove entities without relations
-    vectorize_chunks=True,  # Vectorize chunk for naive (vector) search
-    cluster_only_if_more_than=10000,  # Minimum entities before clustering kicks in
-    max_cluster_size=128,  # Maximum entities per cluster
+    use_llm_summarization=True,  # Включить LLM-суммаризацию сущностей и связей.
+    use_clustering=False,  # Применять кластеризацию перед суммаризацией. Полезно при множестве похожих сущностей.
+    build_only_vector_context=False,  # Пропустить извлечение графа и построить только chunk embeddings.
+    make_community_summary=True,  # Генерировать summary-сообщества.
+    remove_isolated_nodes=True,  # Удалять сущности без связей.
+    vectorize_chunks=True,  # Векторизовать chunks для naive/vector search.
+    cluster_only_if_more_than=10000,  # Минимум сущностей для запуска кластеризации.
+    max_cluster_size=128,  # Максимум сущностей в одном кластере.
 )
 
-# Pass to KnowledgeGraph
+# Передача настроек в KnowledgeGraph.
 knowledge_graph = await KnowledgeGraph(
     client=client,
     embedder=embedder,
@@ -275,19 +284,21 @@ knowledge_graph = await KnowledgeGraph(
     builder_settings=builder_arguments,
 ).build_from_docs(docs)
 ```
+
 ---
 
-### Knowledge Graph Construction
-Each text in corpus is processed to extract structured information. It consist of:
+### Построение графа знаний
 
-* **Entities** — textual representation, entity type, and a contextual description.
-* **Relations** — textual description of the link between two entities (or a relation class), as well as its confidence/strength.
+Каждый текст корпуса обрабатывается для извлечения структурированной информации. В граф попадают:
 
-> **RAGU uses entity and relation classes from [NEREL](https://github.com/nerel-ds/NEREL).**
+* **Сущности** - текстовое представление, тип сущности и контекстное описание.
+* **Связи** - описание отношения между двумя сущностями или класс отношения, а также уверенность/сила связи.
 
-### Entity types
+> **RAGU использует классы сущностей и связей из [NEREL](https://github.com/nerel-ds/NEREL).**
 
-|No. | Entity type | No. | Entity type | No. | Entity type |
+### Типы сущностей
+
+| № | Тип сущности | № | Тип сущности | № | Тип сущности |
 |---|---|---|---|---|---|
 |1.| AGE |11.| FAMILY |21.| PENALTY |
 |2.| AWARD |12.| IDEOLOGY |22.| PERCENT |
@@ -300,9 +311,9 @@ Each text in corpus is processed to extract structured information. It consist o
 |9.| EVENT |19.| ORDINAL |29.| WORK_OF_ART |
 |10.| FACILITY |20.| ORGANIZATION | | |
 
-### Relation types
+### Типы связей
 
-|No. | Relation type | No. | Relation type | No. | Relation type |
+| № | Тип связи | № | Тип связи | № | Тип связи |
 |---|---|---|---|---|---|
 |1.| ABBREVIATION |18.| HEADQUARTERED_IN |35.| PLACE_RESIDES_IN |
 |2.| AGE_DIED_AT |19.| IDEOLOGY_OF |36.| POINT_IN_TIME |
@@ -322,35 +333,40 @@ Each text in corpus is processed to extract structured information. It consist o
 |16.| FOUNDED_BY |33.| PLACE_OF_BIRTH | | |
 |17.| HAS_CAUSE |34.| PLACE_OF_DEATH | | |
 
+### Как выполняется извлечение
 
-### How it is extracted:
-#### 1. Default Pipeline
+#### 1. Базовый пайплайн
 
-File: ragu/triplet/llm_artifact_extractor.py.
-A baseline pipeline that uses LLM to extract entities, relations, and their descriptions in a single step.
+Файл: `ragu/triplet/llm_artifact_extractor.py`.
 
-#### 2. [RAGU-lm](https://huggingface.co/RaguTeam/RAGU-lm) (for russian language)
-A compact model (Qwen-3-0.6B) fine-tuned on the NEREL dataset.
-The pipeline operates in several stages:
-1. Extract unnormalized entities from text.
-2. Normalize entities into canonical forms.
-3. Generate entity descriptions.
-4. Extract relations based on the inner product between entities.
+Базовый пайплайн использует LLM для извлечения сущностей, связей и их описаний за один шаг.
 
-### Comparison
-| Model                 | Dataset | F1 (Entities) | F1 (Relations) |
-|-----------------------|----------|---------------|----------------|
-| Qwen-2.5-14B-Instruct | NEREL | 0.32          | 0.69           |
-| RAGU-lm (Qwen-3-0.6B) | NEREL | 0.6           | 0.71           |
-| Small-model pipeline  | NEREL | 0.74          | 0.75           |
+#### 2. [RAGU-lm](https://huggingface.co/RaguTeam/RAGU-lm) для русского языка
+
+Компактная модель Qwen-3-0.6B, дообученная на датасете NEREL.
+
+Пайплайн работает в несколько этапов:
+
+1. Извлекает ненормализованные сущности из текста.
+2. Нормализует сущности в канонические формы.
+3. Генерирует описания сущностей.
+4. Извлекает связи на основе inner product между сущностями.
+
+### Сравнение
+
+| Модель | Датасет | F1 (сущности) | F1 (связи) |
+|---|---|---|---|
+| Qwen-2.5-14B-Instruct | NEREL | 0.32 | 0.69 |
+| RAGU-lm (Qwen-3-0.6B) | NEREL | 0.6 | 0.71 |
+| Small-model pipeline | NEREL | 0.74 | 0.75 |
 
 ---
 
-### Prompt Customization
+### Настройка prompt
 
-All RAGU components that use LLMs inherit from `RaguGenerativeModule`, which provides methods to view and update prompts.
+Все компоненты RAGU, которые используют LLM, наследуются от `RaguGenerativeModule`. Он предоставляет методы для просмотра и обновления prompt.
 
-#### Viewing Current Prompts
+#### Просмотр текущих prompt
 
 ```python
 from ragu import LocalSearchEngine
@@ -361,23 +377,23 @@ search_engine = LocalSearchEngine(
     embedder
 )
 
-# Get all prompts used by the search engine
+# Получить все prompt, используемые search engine.
 all_prompts = search_engine.get_prompts()
 print(all_prompts)
-# Returns: {'local_search': RAGUInstruction(...)}
+# Вернет: {'local_search': RAGUInstruction(...)}
 
-# Get a specific prompt
+# Получить конкретный prompt.
 local_search_prompt = search_engine.get_prompt("local_search")
 print(local_search_prompt.messages.to_str())
-# Shows the actual prompt content (all conversation as single text)
+# Покажет фактический текст prompt: всю беседу одной строкой.
 
 print(local_search_prompt.pydantic_model)
-# Shows the response pydantic model 
+# Покажет pydantic-модель ответа.
 ```
 
-#### Updating Prompts
+#### Обновление prompt
 
-You can customize prompts by creating a new `RAGUInstruction` with your own messages:
+Prompt можно настроить через новый `RAGUInstruction` с собственными сообщениями:
 
 ```python
 from textwrap import dedent
@@ -386,47 +402,50 @@ from ragu.common.prompts.prompt_storage import RAGUInstruction
 from ragu.common.prompts.messages import ChatMessages, UserMessage, SystemMessage
 from ragu.common.prompts.default_models import DefaultResponseModel
 
-# Create custom prompt instruction
+# Создание собственной prompt-инструкции.
 custom_instruction = RAGUInstruction(
     messages=ChatMessages.from_messages([
-        SystemMessage(content="You are a helpful assistant specialized in academic research."),
+        SystemMessage(content="Вы полезный ассистент, специализирующийся на академических исследованиях."),
         UserMessage(content=dedent(
             """
-            Answer the following query using the provided context.
-            
-            Query: {{ query }}
-            Context: {{ context }}
-            
-            Language: {{ language }}
+            Ответьте на следующий запрос, используя предоставленный контекст.
+
+            Запрос: {{ query }}
+            Контекст: {{ context }}
+
+            Язык: {{ language }}
             """
-        ))  # Can store any conversation
+        ))
     ]),
-    pydantic_model=DefaultResponseModel,  # Your pydantic model (optional)
-    description="Custom local search prompt with academic focus" # Optional
+    pydantic_model=DefaultResponseModel,  # Ваша pydantic-модель, если она нужна.
+    description="Пользовательский prompt для local search с академическим фокусом"
 )
 
-# Update the prompt
+# Обновление prompt.
 search_engine.update_prompt("local_search", custom_instruction)
 ```
+
 ---
 
-### Contributors
-#### **Main Idea & Inspiration**
-- Ivan Bondarenko - idea, smart_chunker, NER model, ragu-lm
+### Участники
 
+#### **Идея и вдохновение**
 
-#### **Core Development**
+- Ivan Bondarenko - идея, smart_chunker, NER-модель, ragu-lm
+
+#### **Основная разработка**
 
 - Mikhail Komarov
 
-#### **Benchmarks & Evaluation**  
+#### **Бенчмарки и оценка**
+
 - Roman Shuvalov
-- Yanya Dement'yeva 
+- Yanya Dement'yeva
 - Alexandr Kuleshevskiy
 - Nikita Kukuzey
 - Stanislav Shtuka
 
 #### **Small Models Pipeline**
+
 - Matvey Solovyev
 - Ilya Myznikov
-

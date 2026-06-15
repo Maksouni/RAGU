@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -34,35 +35,33 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _pid_alive(pid_file: Path) -> bool:
-    if not pid_file.exists():
-        return False
-    raw = pid_file.read_text(encoding="utf-8", errors="ignore").strip()
-    if not raw.isdigit():
-        return False
-    pid = int(raw)
-    if os.name == "nt":
-        import ctypes
-
-        process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, pid)
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
-        return False
+def _check_compose_service(name: str, required: bool) -> CheckResult:
+    compose_file = REPO_ROOT / "examples" / "fastapi_demo" / "docker-compose.yml"
     try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "ps", "--status", "running", "--services"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        if required:
+            return CheckResult(name, "FAIL", f"docker compose status is unavailable: {exc}")
+        return CheckResult(name, "WARN", f"optional component is disabled or docker is unavailable: {exc}")
 
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()[:300]
+        if required:
+            return CheckResult(name, "FAIL", f"docker compose status failed: {message}")
+        return CheckResult(name, "WARN", f"optional component is disabled or docker status failed: {message}")
 
-def _check_pid(name: str, pid_file: Path, required: bool) -> CheckResult:
-    if _pid_alive(pid_file):
-        return CheckResult(name, "OK", f"process is running, pid_file={pid_file}")
+    running = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    if name in running:
+        return CheckResult(name, "OK", "compose service is running")
     if required:
-        return CheckResult(name, "FAIL", f"required process is not running, pid_file={pid_file}")
-    return CheckResult(name, "WARN", f"component is disabled or optional, pid_file={pid_file}")
+        return CheckResult(name, "FAIL", "required compose service is not running")
+    return CheckResult(name, "WARN", "optional compose service is not running")
 
 
 def _check_fastapi(settings: IntegrationSettings) -> CheckResult:
@@ -94,7 +93,7 @@ def _check_memgraph() -> CheckResult:
         return CheckResult("memgraph_bolt", "FAIL", f"Bolt connectivity failed: {exc}")
 
 
-def _check_sheets(settings: IntegrationSettings, run_dir: Path) -> CheckResult:
+def _check_sheets(settings: IntegrationSettings) -> CheckResult:
     if not settings.sheets_sync_enabled:
         return CheckResult("sheets_sync", "WARN", "SHEETS_SYNC_ENABLED=false")
     if not settings.google_sheets_spreadsheet_id:
@@ -103,49 +102,23 @@ def _check_sheets(settings: IntegrationSettings, run_dir: Path) -> CheckResult:
         return CheckResult("sheets_sync", "WARN", "GOOGLE_SERVICE_ACCOUNT_JSON_PATH is empty")
     if not Path(settings.google_service_account_json_path).expanduser().exists():
         return CheckResult("sheets_sync", "FAIL", "Google service account JSON file does not exist")
-    return _check_pid("sheets_sync", run_dir / "sheets_sync.pid", required=True)
+    return _check_compose_service("sheets_sync", required=True)
 
 
-def _check_telegram(settings: IntegrationSettings, run_dir: Path) -> CheckResult:
-    if settings.bot_platform not in {"telegram", "both"}:
-        return CheckResult("telegram_bot", "WARN", f"BOT_PLATFORM={settings.bot_platform}, Telegram is not required")
-    if not settings.telegram_bot_token:
-        return CheckResult("telegram_bot", "FAIL", "TELEGRAM_BOT_TOKEN is empty")
-    return _check_pid("telegram_bot", run_dir / "bot.pid", required=True)
-
-
-def _check_vk(settings: IntegrationSettings, run_dir: Path) -> CheckResult:
-    if settings.bot_platform not in {"vk", "both"}:
-        return CheckResult("vk_bot", "WARN", f"BOT_PLATFORM={settings.bot_platform}, VK is not required")
+def _check_vk(settings: IntegrationSettings) -> CheckResult:
+    if not settings.vk_bot_enabled:
+        return CheckResult("vk_bot", "WARN", "VK_BOT_ENABLED=false")
     if not settings.vk_bot_token:
         return CheckResult("vk_bot", "FAIL", "VK_BOT_TOKEN is empty")
-    return _check_pid("vk_bot", run_dir / "vk_bot.pid", required=True)
+    return _check_compose_service("vk_bot", required=True)
 
 
 def _check_ollama() -> CheckResult:
     provider = (os.getenv("LLM_PROVIDER") or "ollama").strip().lower()
     if _env_flag("DISABLE_LLM_ANSWERS", False):
         return CheckResult("llm_endpoint", "WARN", "DISABLE_LLM_ANSWERS=true, LLM formatting is not required")
-    if provider in {"mistral", "custom"}:
-        api_key = (os.getenv("MISTRAL_API_KEY") if provider == "mistral" else None) or os.getenv("API_KEY") or ""
-        if not api_key.strip() or api_key.strip() == "local":
-            return CheckResult("llm_endpoint", "FAIL", f"LLM_PROVIDER={provider} requires API_KEY")
-        base_url = (os.getenv("BASE_URL") or "").rstrip("/")
-        if provider == "mistral" and base_url in {"", "http://127.0.0.1:11434/v1", "http://localhost:11434/v1"}:
-            base_url = "https://api.mistral.ai/v1"
-        if not base_url:
-            return CheckResult("llm_endpoint", "FAIL", f"LLM_PROVIDER={provider} requires BASE_URL")
-        try:
-            response = httpx.get(
-                f"{base_url}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=5.0,
-                trust_env=False,
-            )
-            response.raise_for_status()
-            return CheckResult("llm_endpoint", "OK", f"{provider} model endpoint is reachable: {base_url}/models")
-        except Exception as exc:
-            return CheckResult("llm_endpoint", "FAIL", f"LLM_PROVIDER={provider} endpoint is unavailable: {exc}")
+    if provider != "ollama":
+        return CheckResult("llm_endpoint", "FAIL", "Only LLM_PROVIDER=ollama is supported")
     base_url = (os.getenv("BASE_URL") or "http://127.0.0.1:11434/v1").rstrip("/")
     try:
         response = httpx.get(f"{base_url}/models", timeout=3.0, trust_env=False)
@@ -170,15 +143,13 @@ def main() -> int:
 
     load_dotenv(REPO_ROOT / ".env", override=True)
     settings = IntegrationSettings()
-    run_dir = REPO_ROOT / ".run"
 
     results = [
         _check_fastapi(settings),
-        _check_pid("orchestrator", run_dir / "orchestrator.pid", required=True),
+        _check_compose_service("orchestrator", required=True),
         _check_memgraph(),
-        _check_sheets(settings, run_dir),
-        _check_telegram(settings, run_dir),
-        _check_vk(settings, run_dir),
+        _check_sheets(settings),
+        _check_vk(settings),
         _check_ollama(),
     ]
     summary = _summary(results)

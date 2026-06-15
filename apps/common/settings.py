@@ -9,7 +9,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AskMode = Literal["local", "global"]
 AnswerMode = Literal["auto", "llm", "no_llm"]
-BotPlatform = Literal["telegram", "vk", "both", "none"]
 
 
 class IntegrationSettings(BaseSettings):
@@ -34,11 +33,7 @@ class IntegrationSettings(BaseSettings):
         validation_alias=AliasChoices("OUTBOX_DB_PATH"),
     )
 
-    bot_platform: BotPlatform = Field(default="telegram", validation_alias=AliasChoices("BOT_PLATFORM"))
-
-    telegram_bot_token: str = Field(default="", validation_alias=AliasChoices("TELEGRAM_BOT_TOKEN"))
-    bot_polling_timeout_sec: int = Field(default=30, validation_alias=AliasChoices("BOT_POLLING_TIMEOUT_SEC"))
-
+    vk_bot_enabled: bool = Field(default=False, validation_alias=AliasChoices("VK_BOT_ENABLED"))
     vk_bot_token: str = Field(default="", validation_alias=AliasChoices("VK_BOT_TOKEN"))
     vk_group_id: str = Field(default="", validation_alias=AliasChoices("VK_GROUP_ID"))
     vk_api_version: str = Field(default="5.199", validation_alias=AliasChoices("VK_API_VERSION"))

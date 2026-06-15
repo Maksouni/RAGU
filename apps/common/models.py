@@ -26,7 +26,7 @@ class AskExchangeEvent(BaseModel):
     user_id: str
     chat_id: str
     correlation_id: str
-    source: str = "telegram"
+    source: str = "vk"
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = Field(default_factory=dict)
 

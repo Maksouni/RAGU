@@ -83,6 +83,74 @@ def test_parse_natural_language_filters() -> None:
     assert q.show == 5
 
 
+def test_parse_postgresql_for_ubuntu_without_format() -> None:
+    q = parse_scenario_query("postgresql для ubuntu")
+    assert q is not None
+    assert q.scenario_type == "versions_by_os"
+    assert q.product == "postgresql"
+    assert q.os == "ubuntu"
+    assert q.package_format is None
+
+
+def test_parse_ubuntu24_postgresql_versions_with_natural_show() -> None:
+    q = parse_scenario_query("покажи последние версии postgresql для ubuntu 24 выведи 5")
+    assert q is not None
+    assert q.scenario_type == "versions_by_os"
+    assert q.product == "postgresql"
+    assert q.os == "ubuntu"
+    assert q.os_version == "24"
+    assert q.sort_by == "newest"
+    assert q.show == 5
+
+
+def test_parse_expanded_products_for_ubuntu24() -> None:
+    cases = [
+        ("redis для ubuntu 24", "redis"),
+        ("Go для ubuntu 24", "golang"),
+        ("java для ubuntu 24", "openjdk"),
+        ("sqlite для ubuntu 24", "sqlite3"),
+        ("nodejs для ubuntu 24", "nodejs"),
+        ("rust для ubuntu 24", "rustc"),
+    ]
+    for text, product in cases:
+        q = parse_scenario_query(text)
+        assert q is not None
+        assert q.scenario_type == "versions_by_os"
+        assert q.product == product
+        assert q.os == "ubuntu"
+        assert q.os_version == "24"
+
+
+def test_parse_install_file_wording_does_not_treat_installation_as_os() -> None:
+    q = parse_scenario_query("дай файл для установки go для ubuntu 24 show=3")
+    assert q is not None
+    assert q.scenario_type == "versions_by_os"
+    assert q.product == "golang"
+    assert q.os == "ubuntu"
+    assert q.os_version == "24"
+    assert q.show == 3
+
+
+def test_parse_english_install_file_for_go_on_ubuntu() -> None:
+    q = parse_scenario_query("give install file for go on ubuntu 24 show=3")
+    assert q is not None
+    assert q.scenario_type == "versions_by_os"
+    assert q.product == "golang"
+    assert q.os == "ubuntu"
+    assert q.os_version == "24"
+    assert q.show == 3
+
+
+def test_parse_oldest_and_name_sort_without_params() -> None:
+    q_old = parse_scenario_query("покажи старые версии postgresql для ubuntu 24")
+    assert q_old is not None
+    assert q_old.sort_by == "oldest"
+
+    q_name = parse_scenario_query("покажи версии postgresql для ubuntu 24 по имени")
+    assert q_name is not None
+    assert q_name.sort_by == "name"
+
+
 def test_parse_context_rewritten_latest_product_version() -> None:
     q = parse_scenario_query("product=redis latest version дай мне его последнюю версию show=1")
     assert q is not None

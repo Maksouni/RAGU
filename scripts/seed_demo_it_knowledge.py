@@ -43,6 +43,18 @@ PREPARED_IT_ANSWERS: list[dict[str, Any]] = [
     },
     {
         "event_type": "prepared_it_answer",
+        "id": "prepared_it_redis_definition",
+        "topic": "Redis",
+        "question": "Что такое Redis?",
+        "keywords": ["redis", "cache", "key-value", "database", "in-memory", "база", "кеш"],
+        "answer": (
+            "Redis - это in-memory key-value хранилище данных. Его часто используют как кеш, broker для очередей, "
+            "хранилище с TTL и быстрый слой для счетчиков, сессий и rate limiting. Redis не является языком программирования: "
+            "это сервер базы данных, который поддерживает строки, списки, множества, hash-структуры, sorted sets и pub/sub."
+        ),
+    },
+    {
+        "event_type": "prepared_it_answer",
         "id": "prepared_it_postgresql_index",
         "topic": "PostgreSQL index",
         "question": "Как работает индекс в PostgreSQL?",
@@ -95,13 +107,13 @@ PREPARED_IT_ANSWERS: list[dict[str, Any]] = [
     },
     {
         "event_type": "prepared_it_answer",
-        "id": "prepared_it_bot_routing",
-        "topic": "Telegram and VK bot routing",
-        "question": "Как работает Telegram/VK bot routing?",
-        "keywords": ["telegram", "vk", "bot", "routing", "маршрутизация"],
+        "id": "prepared_it_vk_bot_routing",
+        "topic": "VK bot routing",
+        "question": "Как работает VK bot routing?",
+        "keywords": ["vk", "bot", "routing", "маршрутизация"],
         "answer": (
-            "Telegram и VK получают сообщение пользователя, отделяют команды /start, /help, /llm и /nollm, "
-            "а затем отправляют текст в общий AskOrchestrator. Оркестратор выбирает режим ответа, проверяет "
+            "VK bot получает сообщение пользователя, отделяет команды /start, /help, /llm и /nollm, "
+            "а затем передает текст в общий AskOrchestrator. Оркестратор выбирает режим ответа, проверяет "
             "тип запроса и либо запускает package-сценарий, либо отправляет обычный IT-вопрос в semantic/graph search."
         ),
     },
@@ -119,14 +131,38 @@ PREPARED_IT_ANSWERS: list[dict[str, Any]] = [
     },
     {
         "event_type": "prepared_it_answer",
-        "id": "prepared_it_ollama_mistral",
-        "topic": "Ollama vs Mistral in RAGU",
-        "question": "Чем Ollama отличается от Mistral в этом проекте?",
-        "keywords": ["ollama", "mistral", "llm", "provider", "model"],
+        "id": "prepared_it_ollama_local_runtime",
+        "topic": "Ollama local runtime in RAGU",
+        "question": "Зачем в проекте используется Ollama?",
+        "keywords": ["ollama", "llm", "local", "model", "runtime"],
         "answer": (
-            "Ollama запускает LLM и embeddings локально на ноутбуке, поэтому не требует внешнего API, "
-            "но нагружает машину. Mistral работает через внешний API: ноутбуку легче, но нужен ключ и интернет. "
-            "В обоих случаях модель не скрапит источники сама, а только оформляет уже подготовленный контекст."
+            "Ollama запускает LLM и embeddings локально на машине, поэтому демо не требует внешнего API. "
+            "Контейнеры FastAPI и orchestrator обращаются к локальному OpenAI-compatible endpoint Ollama, "
+            "а сама модель не скрапит источники: она только оформляет уже подготовленный registry/scraper или graph контекст."
+        ),
+    },
+    {
+        "event_type": "prepared_it_answer",
+        "id": "prepared_it_registry_scraper_flow",
+        "topic": "Registry and scraper flow",
+        "question": "Как registry и scraper работают в RAGU?",
+        "keywords": ["registry", "scraper", "template", "parser", "package"],
+        "answer": (
+            "Registry хранит шаблоны источников: ОС, версия ОС, формат пакета, URL листинга и тип parser. "
+            "Scraper берет подходящий template, скачивает листинг, парсит deb/rpm/exe артефакты и возвращает нормализованные PackageArtifact. "
+            "Так LLM не придумывает ссылки: она получает уже проверяемый список файлов и источников."
+        ),
+    },
+    {
+        "event_type": "prepared_it_answer",
+        "id": "prepared_it_fastapi_ingest",
+        "topic": "FastAPI ingest flow",
+        "question": "Что делает endpoint /ingest/json?",
+        "keywords": ["fastapi", "ingest", "json", "graph", "api"],
+        "answer": (
+            "POST /ingest/json принимает JSON objects и plain strings, превращает их в документы и запускает индексацию. "
+            "Для prepared_it_answer и ask_exchange используется быстрый graph path: создаются сущности, связи и понятный путь "
+            "query -> answer -> artifact без обязательного LLM-извлечения."
         ),
     },
     {

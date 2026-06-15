@@ -12,15 +12,15 @@ INVALID_QUERY_MESSAGE = (
     "- дай список всех версий PostgreSQL для debian 13\n"
     "- дай список всех пакетов PostgreSQL 17.6\n"
     "- Python 3.12 для Ubuntu limit=10\n\n"
-    "Можно добавить фильтры: format=deb|rpm|apk|exe, source=<часть имени>, "
+    "Можно добавить фильтры: format=deb|rpm|exe, source=<часть имени>, "
     "sort=newest|oldest|name, limit=10, show=5. Для строгого поиска только по базе используйте /db."
 )
 
 _VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+\b")
 _DOMAIN_TOKEN_RE = re.compile(
     r"\b("
-    r"postgresql|postgres|python|ubuntu|debian|alpine|rhel|windows|win|"
-    r"deb|rpm|apk|exe|package|packages|version|versions|"
+    r"postgresql|postgres|python|ubuntu|debian|rhel|windows|win|"
+    r"deb|rpm|exe|package|packages|version|versions|"
     r"пакет|пакеты|пакетов|версия|версии|версий|сборка|сборки|"
     r"дебиан|убунту|виндовс"
     r")\b",
@@ -32,7 +32,7 @@ _GENERAL_IT_TOKEN_RE = re.compile(
     r"docker|container|image|volume|compose|kubernetes|k8s|linux|ubuntu|debian|"
     r"postgresql|postgres|sql|database|index|transaction|python|pip|venv|fastapi|"
     r"api|endpoint|http|rest|git|branch|commit|merge|rebase|ssh|tls|ssl|certificate|jwt|oauth|"
-    r"rag|memgraph|graph|embedding|embeddings|vector|llm|ollama|mistral|telegram|vk|bot|"
+    r"rag|memgraph|graph|embedding|embeddings|vector|llm|ollama|vk|bot|"
     r"redis|cache|nginx|proxy|json|yaml|dockerfile|ci|cd"
     r")\b",
     re.IGNORECASE,
@@ -66,15 +66,12 @@ def is_supported_package_query(text: str) -> bool:
 
 def is_supported_general_it_query(text: str) -> bool:
     value = (text or "").strip()
-    if len(value) < 6:
-        return False
-    if _CHAT_ONLY_RE.search(value):
+    if len(value) < 3:
         return False
     if is_supported_package_query(value):
         return False
 
     has_it_terms = bool(_GENERAL_IT_TOKEN_RE.search(value) or _GENERAL_IT_RU_TOKEN_RE.search(value))
-    if not has_it_terms:
-        return False
-
-    return bool(_QUESTION_WORD_RE.search(value) or value.endswith("?") or len(value.split()) >= 4)
+    if has_it_terms:
+        return True
+    return bool(_QUESTION_WORD_RE.search(value) or value.endswith("?") or len(value.split()) >= 2)

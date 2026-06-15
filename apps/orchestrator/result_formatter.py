@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 from typing import Callable
 
 from apps.orchestrator.query_parser import ScenarioQuery
@@ -22,13 +23,19 @@ def _deduplicate(artifacts: list[PackageArtifact]) -> list[PackageArtifact]:
 
 
 def _version_key(version: str) -> tuple[int, ...]:
-    tokens = []
-    for part in version.replace("-", ".").split("."):
-        try:
-            tokens.append(int(part))
-        except ValueError:
-            break
-    return tuple(tokens)
+    value = version.split(":", 1)[-1]
+    upstream, _, revision = value.partition("-")
+    upstream_numbers = tuple(int(part) for part in re.findall(r"\d+", upstream))
+    revision_low = revision.lower()
+    if "ubuntu0." in revision_low:
+        revision_rank = (3000, *[int(part) for part in re.findall(r"\d+", revision_low)])
+    elif "ubuntu" in revision_low:
+        revision_rank = (2000, *[int(part) for part in re.findall(r"\d+", revision_low)])
+    elif "build" in revision_low:
+        revision_rank = (1000, *[int(part) for part in re.findall(r"\d+", revision_low)])
+    else:
+        revision_rank = tuple(int(part) for part in re.findall(r"\d+", revision_low))
+    return (*upstream_numbers, *revision_rank)
 
 
 def _apply_filters(query: ScenarioQuery, artifacts: list[PackageArtifact]) -> list[PackageArtifact]:

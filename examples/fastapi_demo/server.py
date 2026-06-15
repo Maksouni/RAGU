@@ -12,6 +12,10 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from apps.common.bot_messages import START_MESSAGE
+from apps.orchestrator.scenario_manager import ScenarioManager
+from apps.registry.repository import RegistryRepository
+from apps.scraper.service import PackageScraperService
 from ragu import (
     ArtifactsExtractorLLM,
     BuilderArguments,
@@ -27,9 +31,24 @@ from ragu.llm import OpenAIClient
 from ragu.storage.graph_storage_adapters.memgraph_adapter import MemgraphStorage
 from ragu.storage.index import StorageArguments
 
-# Load .env from repo root for local runs.
-# Use override=True so explicit project config wins over stale shell vars.
-load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+
+def _load_project_env() -> None:
+    """Load .env for local runs without assuming the Docker image path depth."""
+    current_file = Path(__file__).resolve()
+    candidates = [
+        current_file.parent / ".env",
+        Path.cwd() / ".env",
+    ]
+    if len(current_file.parents) > 2:
+        candidates.append(current_file.parents[2] / ".env")
+
+    for env_path in candidates:
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
+            return
+
+
+_load_project_env()
 
 AnswerMode = Literal["auto", "llm", "no_llm"]
 EMBEDDING_TEXT_LIMIT = 1800
@@ -62,12 +81,33 @@ LEXICAL_STOPWORDS = {
     "что",
     "чем",
 }
+KNOWN_GENERAL_ANSWERS = {
+    "redis": (
+        "Redis - это in-memory key-value хранилище данных. Его часто используют как кеш, broker для очередей, "
+        "хранилище с TTL и быстрый слой для счетчиков, сессий и rate limiting. Redis не является языком программирования: "
+        "это сервер базы данных, который поддерживает строки, списки, множества, hash-структуры, sorted sets и pub/sub."
+    ),
+    "mysql": "MySQL - это реляционная СУБД для SQL-данных, транзакций, индексов и клиент-серверных приложений.",
+    "mariadb": "MariaDB - это открытая реляционная СУБД, совместимая с MySQL на уровне SQL и многих клиентских инструментов.",
+    "sqlite": "SQLite - это встраиваемая SQL-база данных в одном файле, без отдельного серверного процесса.",
+    "mongodb": "MongoDB - это документная NoSQL-СУБД, где данные обычно хранятся в BSON-документах и коллекциях.",
+    "go": "Go - это компилируемый язык программирования от Google с простой моделью конкурентности через goroutines.",
+    "golang": "Go - это компилируемый язык программирования от Google с простой моделью конкурентности через goroutines.",
+    "nodejs": "Node.js - это runtime для JavaScript на сервере, построенный вокруг событийной модели и неблокирующего ввода-вывода.",
+    "ruby": "Ruby - это динамический объектно-ориентированный язык программирования, известный лаконичным синтаксисом и Rails-экосистемой.",
+    "php": "PHP - это серверный язык программирования, широко используемый для веб-приложений и CMS.",
+    "openjdk": "OpenJDK - это открытая реализация Java Development Kit: компилятор, JVM и стандартные инструменты Java.",
+    "java": "Java - это язык и платформа выполнения на JVM; для установки в Linux обычно используется OpenJDK.",
+    "rust": "Rust - это системный язык программирования с упором на безопасность памяти без сборщика мусора.",
+    "rustc": "rustc - это компилятор языка Rust; вместе с cargo он используется для сборки Rust-проектов.",
+}
 
 
 class AppState:
     knowledge_graph: KnowledgeGraph = None
     local_search_engine: LocalSearchEngine = None
     global_search_engine: GlobalSearchEngine = None
+    scenario_manager: ScenarioManager = None
     raw_llm_client: AsyncOpenAI = None
     is_indexing: bool = False
     embedding_dim: int = 20
@@ -107,8 +147,19 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _llm_provider() -> str:
-    return (os.getenv("LLM_PROVIDER") or "ollama").strip().lower() or "ollama"
+    provider = (os.getenv("LLM_PROVIDER") or "ollama").strip().lower() or "ollama"
+    return "ollama" if provider == "ollama" else "unsupported"
 
 
 def _llm_enabled(answer_mode: AnswerMode) -> bool:
@@ -119,6 +170,10 @@ def _llm_enabled(answer_mode: AnswerMode) -> bool:
     return not _env_flag("DISABLE_LLM_ANSWERS", False)
 
 
+def _effective_answer_mode(answer_mode: AnswerMode) -> Literal["llm", "no_llm"]:
+    return "llm" if _llm_enabled(answer_mode) else "no_llm"
+
+
 def _tokenize(text: str) -> List[str]:
     return [t for t in re.findall(r"\w+", text.lower()) if len(t) >= 3 and t not in LEXICAL_STOPWORDS]
 
@@ -126,6 +181,32 @@ def _tokenize(text: str) -> List[str]:
 def _match_score(content: str, tokens: List[str]) -> int:
     content_tokens = set(_tokenize(content))
     return sum(1 for token in tokens if token in content_tokens)
+
+
+def _is_definition_question(question: str, topic: str) -> bool:
+    normalized = _normalize_question(question)
+    escaped_topic = re.escape(topic)
+    patterns = (
+        rf"^(?:что\s+такое|что\s+значит|что\s+означает)\s+(?:язык\s+|субд\s+|база\s+данных\s+)?{escaped_topic}$",
+        rf"^(?:what\s+is|define)\s+(?:the\s+)?{escaped_topic}(?:\s+language)?$",
+        rf"^{escaped_topic}\s+(?:это\s+)?что$",
+    )
+    return any(re.fullmatch(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+
+
+def _known_general_answer(question: str, search_scope: Literal["local", "global"]) -> str | None:
+    for topic, answer in KNOWN_GENERAL_ANSWERS.items():
+        if _is_definition_question(question, topic):
+            return "\n".join(
+                [
+                    "NO-LLM заготовленный IT-ответ",
+                    f"Внутренний режим: {search_scope}; генерация LLM: выключена; поиск: built_in_topic:{topic}.",
+                    f"Тема: {topic}",
+                    "",
+                    answer,
+                ]
+            )
+    return None
 
 
 def _normalize_question(text: str) -> str:
@@ -621,12 +702,12 @@ async def build_llm_general_answer(question: str, search_scope: Literal["local",
             print(f"Warning: prepared IT lookup failed: {exc}")
 
     prompt = (
-        "Ответь на обычный IT-вопрос на русском языке. Если есть локальный контекст, опирайся на него. "
+        "Ответь на вопрос пользователя на русском языке. Если есть локальный контекст, опирайся на него. "
         "Если локального контекста нет, дай аккуратный общий ответ как LLM. "
         "Не копируй локальный контекст дословно: переформулируй его под вопрос пользователя, "
         "добавь 1-3 полезные детали, но не противоречь локальному контексту. "
         "Если вопрос просит конкретные файлы установки, версии пакетов или ссылки на скачивание, не выдумывай ссылки: "
-        "скажи, что для этого нужен package-запрос с продуктом, версией, ОС и format=deb|rpm|apk|exe.\n\n"
+        "скажи, что для этого нужен package-запрос с продуктом, версией, ОС и format=deb|rpm|exe.\n\n"
         f"Вопрос:\n{question}\n\n"
         f"Локальный контекст:\n{context or 'Нет достаточно точной записи в локальной IT-базе.'}"
     )
@@ -636,7 +717,7 @@ async def build_llm_general_answer(question: str, search_scope: Literal["local",
             {
                 "role": "system",
                 "content": (
-                    "Ты кратко и точно отвечаешь на IT-вопросы. "
+                    "Ты кратко и точно отвечаешь на вопросы пользователя. "
                     "Если дан локальный контекст, используй его как источник фактов, но формулируй ответ заново. "
                     "Не выдумывай download URL и версии пакетов."
                 ),
@@ -703,9 +784,19 @@ async def lifespan(app: FastAPI):
 
     state.local_search_engine = LocalSearchEngine(client, state.knowledge_graph, embedder)
     state.global_search_engine = GlobalSearchEngine(client, state.knowledge_graph)
+    state.scenario_manager = ScenarioManager(
+        registry=RegistryRepository(),
+        scraper=PackageScraperService(timeout_sec=_env_float("ASK_TIMEOUT_SEC", 60.0)),
+    )
 
     print("GraphRAG Server ready.")
-    yield
+    try:
+        yield
+    finally:
+        scenario_manager = state.scenario_manager
+        scraper = getattr(scenario_manager, "_scraper", None) if scenario_manager is not None else None
+        if scraper is not None and hasattr(scraper, "aclose"):
+            await scraper.aclose()
 
 
 app = FastAPI(title="GraphRAG JSON Service", lifespan=lifespan)
@@ -738,8 +829,62 @@ async def run_indexing(docs: List[str], source_desc: str):
         state.is_indexing = False
 
 
+async def _package_answer_if_supported(
+    question: str,
+    search_scope: Literal["local", "global"],
+    answer_mode: AnswerMode,
+) -> dict[str, str] | None:
+    scenario_manager = state.scenario_manager
+    if scenario_manager is None:
+        return None
+
+    effective_answer_mode = _effective_answer_mode(answer_mode)
+    scenario_result = await scenario_manager.handle_if_supported(
+        question,
+        requested_mode=search_scope,
+        answer_mode=effective_answer_mode,
+    )
+    if not scenario_result.handled:
+        return None
+
+    answer = scenario_result.answer
+    response_mode = f"registry_scrape_{search_scope}"
+    artifacts_count = int(scenario_result.metadata.get("artifacts_count") or 0)
+    if effective_answer_mode == "llm" and artifacts_count > 0:
+        try:
+            beautified = await answer_llm(
+                BeautifyAnswerRequest(question=question, structured_answer=answer)
+            )
+            beautified_answer = str(beautified.get("answer", "")).strip()
+            if beautified_answer:
+                answer = beautified_answer
+                response_mode = f"registry_scrape_llm_{search_scope}"
+        except Exception as exc:
+            print(f"Warning: package LLM formatter failed, structured answer is used: {exc}")
+
+    return {"answer": answer, "mode": response_mode, "answer_mode": effective_answer_mode}
+
+
+@app.get("/start")
+async def start():
+    return {"answer": START_MESSAGE, "mode": "start"}
+
+
+@app.post("/start")
+async def start_post():
+    return await start()
+
+
 @app.post("/ask/local")
 async def ask_local(request: QueryRequest):
+    package_answer = await _package_answer_if_supported(request.question, "local", request.answer_mode)
+    if package_answer is not None:
+        return package_answer
+
+    known_answer = _known_general_answer(request.question, "local")
+    if known_answer is not None:
+        return {"answer": known_answer, "mode": "known_general_local", "answer_mode": "no_llm"}
+
     if not _llm_enabled(request.answer_mode):
         answer = await build_no_llm_answer(request.question, "local")
         return {"answer": answer, "mode": "no_llm_semantic_local", "answer_mode": "no_llm"}
@@ -753,8 +898,21 @@ async def ask_local(request: QueryRequest):
         return {"answer": answer, "mode": "llm_fallback_no_llm_local", "answer_mode": "no_llm"}
 
 
+@app.post("/ask")
+async def ask_default(request: QueryRequest):
+    return await ask_local(request)
+
+
 @app.post("/ask/global")
 async def ask_global(request: QueryRequest):
+    package_answer = await _package_answer_if_supported(request.question, "global", request.answer_mode)
+    if package_answer is not None:
+        return package_answer
+
+    known_answer = _known_general_answer(request.question, "global")
+    if known_answer is not None:
+        return {"answer": known_answer, "mode": "known_general_global", "answer_mode": "no_llm"}
+
     if not _llm_enabled(request.answer_mode):
         answer = await build_no_llm_answer(request.question, "global")
         return {"answer": answer, "mode": "no_llm_semantic_global", "answer_mode": "no_llm"}
@@ -837,7 +995,7 @@ async def status():
             "message": (
                 "disabled by DISABLE_LLM_ANSWERS"
                 if _env_flag("DISABLE_LLM_ANSWERS", False)
-                else f"configured provider={_llm_provider()}"
+                else f"configured local OpenAI-compatible endpoint={os.getenv('BASE_URL')}"
             ),
         },
     }

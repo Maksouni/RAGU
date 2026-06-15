@@ -4,13 +4,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ParserType = Literal["deb_html", "rpm_html", "apk_index", "exe_html"]
+ParserType = Literal["deb_html", "deb_packages_gz", "rpm_html", "exe_html"]
 
 
 class RepositoryTemplate(BaseModel):
     template_id: str
     source_name: str
-    package_format: Literal["deb", "rpm", "apk", "exe"]
+    package_format: Literal["deb", "rpm", "exe"]
     parser_type: ParserType
     product_hint: str = "postgresql"
     os: str | None = None

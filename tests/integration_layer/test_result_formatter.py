@@ -72,3 +72,16 @@ def test_show_limits_visible_versions_not_packages() -> None:
 
     assert len(_version_lines(answer)) == 5
     assert len(_package_lines(answer)) == 5
+
+
+def test_ubuntu_update_revision_sorts_after_initial_build() -> None:
+    query = parse_scenario_query("последние версии redis для ubuntu 24 show=1")
+    assert query is not None
+    artifacts = [
+        _artifact(1, "deb", "5:7.0.15-1build2"),
+        _artifact(2, "deb", "5:7.0.15-1ubuntu0.24.04.4"),
+    ]
+
+    answer = format_scenario_answer(query, artifacts)
+
+    assert _version_lines(answer)[0].startswith("- 5:7.0.15-1ubuntu0.24.04.4")

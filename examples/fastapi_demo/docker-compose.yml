@@ -1,7 +1,7 @@
 services:
   memgraph:
     image: memgraph/memgraph:3.8.1
-    container_name: memgraph-demo
+    container_name: ragu-memgraph
     ports:
       - "127.0.0.1:7687:7687"
     volumes:
@@ -9,73 +9,106 @@ services:
 
   memgraph-lab:
     image: memgraph/lab:latest
-    container_name: memgraph-lab-demo
+    container_name: ragu-memgraph-lab
+    profiles: ["lab"]
     depends_on:
       - memgraph
     ports:
       - "127.0.0.1:3000:3000"
 
-  vllm:
-    image: vllm/vllm-openai:v0.17.1
-    container_name: vllm-demo
-    volumes:
-      - ./.models:/root/.cache/huggingface
-    ports:
-      - "127.0.0.1:8080:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command:
-      - "--model"
-      - "Qwen/Qwen2.5-3B-Instruct-AWQ"
-      - "--gpu-memory-utilization"
-      - "0.55"
-      - "--max-model-len"
-      - "4096"
-
-  vllm-embed:
-    image: vllm/vllm-openai:v0.17.1
-    container_name: vllm-embed-demo
-    volumes:
-      - ./.models:/root/.cache/huggingface
-    ports:
-      - "127.0.0.1:8081:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command:
-      - "--model"
-      - "nomic-ai/nomic-embed-text-v1.5"
-      - "--trust-remote-code"
-      - "--gpu-memory-utilization"
-      - "0.12"
-      - "--max-model-len"
-      - "1024"
-
-  grg:
+  fastapi:
     build:
       context: ../..
       dockerfile: examples/fastapi_demo/Dockerfile
-    container_name: grg-demo
+    container_name: ragu-fastapi
     depends_on:
       - memgraph
     environment:
-      - API_KEY=text
-      - BASE_URL=http://vllm-demo:8000/v1
-      - EMBEDDING_BASE_URL=http://vllm-embed-demo:8000/v1
-      - LLM_MODEL_NAME=Qwen/Qwen2.5-3B-Instruct-AWQ
-      - EMBEDDER_MODEL_NAME=nomic-ai/nomic-embed-text-v1.5
-      - MEMGRAPH_URI=bolt://memgraph:7687
+      API_KEY: ${API_KEY:-local}
+      BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      EMBEDDING_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-qwen2.5:3b}
+      EMBEDDER_MODEL_NAME: ${EMBEDDER_MODEL_NAME:-nomic-embed-text}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-20}
+      DISABLE_LLM_ANSWERS: ${DISABLE_LLM_ANSWERS:-false}
+      MEMGRAPH_URI: bolt://memgraph:7687
+      MEMGRAPH_DATABASE: ${MEMGRAPH_DATABASE:-}
+      MEMGRAPH_USERNAME: ${MEMGRAPH_USERNAME:-}
+      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-}
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - ragu_working_dir:/app/ragu_working_dir
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: examples/fastapi_demo/Dockerfile
+    container_name: ragu-orchestrator
+    depends_on:
+      - fastapi
+    command: ["python", "-m", "apps.orchestrator.main"]
+    environment:
+      API_BASE_URL: http://fastapi:8000
+      DEFAULT_ASK_MODE: ${DEFAULT_ASK_MODE:-local}
+      DEFAULT_ANSWER_MODE: ${DEFAULT_ANSWER_MODE:-auto}
+      ASK_TIMEOUT_SEC: ${ASK_TIMEOUT_SEC:-90}
+      INGEST_TIMEOUT_SEC: ${INGEST_TIMEOUT_SEC:-90}
+      INGEST_INTERVAL_SEC: ${INGEST_INTERVAL_SEC:-15}
+      INGEST_BATCH_SIZE: ${INGEST_BATCH_SIZE:-20}
+      INGEST_MAX_ATTEMPTS: ${INGEST_MAX_ATTEMPTS:-10}
+      INGEST_BACKOFF_BASE_SEC: ${INGEST_BACKOFF_BASE_SEC:-3}
+      INGEST_BACKOFF_MAX_SEC: ${INGEST_BACKOFF_MAX_SEC:-120}
+      OUTBOX_DB_PATH: /app/ragu_working_dir/integration/outbox.sqlite
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DISABLE_LLM_ANSWERS: ${DISABLE_LLM_ANSWERS:-false}
+    volumes:
+      - ragu_working_dir:/app/ragu_working_dir
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  sheets_sync:
+    build:
+      context: ../..
+      dockerfile: examples/fastapi_demo/Dockerfile
+    container_name: ragu-sheets-sync
+    profiles: ["sheets"]
+    depends_on:
+      - orchestrator
+    command: ["python", "-m", "apps.sheets_sync.main"]
+    environment:
+      OUTBOX_DB_PATH: /app/ragu_working_dir/integration/outbox.sqlite
+      SHEETS_SYNC_ENABLED: ${SHEETS_SYNC_ENABLED:-false}
+      SHEETS_SYNC_INTERVAL_SEC: ${SHEETS_SYNC_INTERVAL_SEC:-15}
+      GOOGLE_SHEETS_SPREADSHEET_ID: ${GOOGLE_SHEETS_SPREADSHEET_ID:-}
+      GOOGLE_SERVICE_ACCOUNT_JSON_PATH: ${GOOGLE_SERVICE_ACCOUNT_JSON_PATH:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ragu_working_dir:/app/ragu_working_dir
+
+  vk_bot:
+    build:
+      context: ../..
+      dockerfile: examples/fastapi_demo/Dockerfile
+    container_name: ragu-vk-bot
+    profiles: ["vk"]
+    depends_on:
+      - orchestrator
+    command: ["python", "-m", "apps.vk_bot.main"]
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      API_BASE_URL: http://fastapi:8000
+      VK_BOT_ENABLED: ${VK_BOT_ENABLED:-false}
+      VK_API_VERSION: ${VK_API_VERSION:-5.199}
+      VK_LONG_POLL_WAIT_SEC: ${VK_LONG_POLL_WAIT_SEC:-25}
+      OUTBOX_DB_PATH: /app/ragu_working_dir/integration/outbox.sqlite
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DISABLE_LLM_ANSWERS: ${DISABLE_LLM_ANSWERS:-false}
     volumes:
       - ragu_working_dir:/app/ragu_working_dir
     extra_hosts:

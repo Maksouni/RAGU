@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from apps.common.api_client import ApiClientError, RaguApiClient
+from apps.common.bot_messages import START_MESSAGE
 from apps.common.models import AskExchangeEvent, AskResult
 from apps.common.outbox import OutboxRepository
 from apps.common.routing import route_mode_and_question
@@ -30,18 +31,29 @@ _CONTEXT_REFERENCE_RE = re.compile(
 )
 _LATEST_VERSION_RE = re.compile(
     r"(?:последн\w*|новейш\w*|свеж\w*|latest|newest).{0,50}(?:верс\w*|version)|"
-    r"(?:верс\w*|version).{0,50}(?:последн\w*|новейш\w*|свеж\w*|latest|newest)",
+    r"(?:верс\w*|version).{0,50}(?:последн\w*|новейш\w*|свеж\w*|latest|newest)|"
+    r"\bпоследн(?:юю|ую|яя|ее|ий)\b",
     re.IGNORECASE,
 )
 _PRODUCT_PARAM_RE = re.compile(r"\bproduct\s*=\s*(?P<product>[a-z0-9+_.-]+)\b", re.IGNORECASE)
+_SHOW_PARAM_RE = re.compile(r"\bshow\s*=", re.IGNORECASE)
+_VERSION_WORD_RE = re.compile(r"(?:\bversion\b|верс\w*)", re.IGNORECASE)
 _KNOWN_SUBJECT_RE = re.compile(
-    r"\b(?P<subject>redis|postgresql|postgres|python|docker|nginx|kubernetes|k8s|linux|debian|ubuntu)\b",
+    r"\b(?P<subject>redis|postgresql|postgres|python|mysql|mariadb|sqlite|sqlite3|mongodb|mongo|go|golang|node|nodejs|javascript|ruby|php|java|openjdk|rust|rustc|docker|nginx|kubernetes|k8s)\b",
     re.IGNORECASE,
 )
 _SUBJECT_ALIASES = {
     "postgres": "postgresql",
     "k8s": "kubernetes",
+    "sqlite": "sqlite3",
+    "mongo": "mongodb",
+    "go": "golang",
+    "node": "nodejs",
+    "javascript": "nodejs",
+    "java": "openjdk",
+    "rust": "rustc",
 }
+_START_COMMANDS = {"/start", "start", "/help", "help", "помощь", "начать"}
 
 
 def _needs_dialog_context(question: str) -> bool:
@@ -80,8 +92,16 @@ def _extract_subject_from_event(previous: AskExchangeEvent) -> str | None:
 def _build_contextual_question(question: str, previous: AskExchangeEvent | None) -> str:
     if previous is None or not _needs_dialog_context(question):
         return question
+    if _PRODUCT_PARAM_RE.search(question):
+        return question
     if _is_latest_version_followup(question):
         subject = _extract_subject_from_text(question) or _extract_subject_from_event(previous)
+        previous_question = " ".join(previous.question.split())
+        if subject and _VERSION_WORD_RE.search(question):
+            return f"product={subject} latest version {question}"
+        if previous_question:
+            suffix = "" if _SHOW_PARAM_RE.search(question) else " show=1"
+            return f"{previous_question}. {question}{suffix}"
         if subject:
             return f"product={subject} latest version {question}"
     previous_question = " ".join(previous.question.split())
@@ -166,6 +186,16 @@ class AskOrchestrator:
         )
         if not routed.question:
             raise ValueError("Question is empty after mode parsing.")
+        if routed.question.strip().lower() in _START_COMMANDS:
+            response_time_ms = int((time.perf_counter() - started_at) * 1000)
+            return AskResult(
+                question=routed.question,
+                answer=START_MESSAGE,
+                requested_mode=routed.mode,
+                answer_mode=effective_answer_mode,
+                response_mode="start",
+                response_time_ms=response_time_ms,
+            )
         find_recent_context = getattr(self._outbox, "find_recent_context", None)
         previous_context = find_recent_context(chat_id=chat_id, user_id=user_id) if callable(find_recent_context) else None
         processing_question = _build_contextual_question(routed.question, previous_context)

@@ -1,22 +1,9 @@
-import tarfile
-from io import BytesIO
-
 from apps.scraper.parsers import (
-    parse_apk_index,
+    parse_deb_packages_index,
     parse_deb_html_listing,
     parse_exe_html_listing,
     parse_rpm_html_listing,
 )
-
-
-def _build_apk_index_tar_gz(text: str) -> bytes:
-    buffer = BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        content = text.encode("utf-8")
-        info = tarfile.TarInfo(name="APKINDEX")
-        info.size = len(content)
-        tar.addfile(info, BytesIO(content))
-    return buffer.getvalue()
 
 
 def test_parse_deb_html_listing() -> None:
@@ -37,6 +24,66 @@ def test_parse_deb_html_listing() -> None:
     assert artifacts[0].package_format == "deb"
 
 
+def test_parse_deb_packages_index_filters_by_package_names() -> None:
+    data = b"""
+Package: redis-server
+Version: 5:7.0.15-1ubuntu0.24.04.1
+Architecture: amd64
+Filename: pool/universe/r/redis/redis-server_7.0.15-1ubuntu0.24.04.1_amd64.deb
+
+Package: redis-doc
+Version: 5:7.0.15-1ubuntu0.24.04.1
+Architecture: all
+Filename: pool/universe/r/redis/redis-doc_7.0.15-1ubuntu0.24.04.1_all.deb
+"""
+    artifacts = parse_deb_packages_index(
+        data=data,
+        base_url="https://archive.ubuntu.com/ubuntu/",
+        source_name="ubuntu-noble",
+        source_url="https://archive.ubuntu.com/ubuntu/dists/noble/universe/binary-amd64/",
+        product="redis",
+        os_name="ubuntu",
+        os_version="24.04",
+        package_names=["redis-server"],
+    )
+    assert len(artifacts) == 1
+    assert artifacts[0].package_name == "redis-server"
+    assert artifacts[0].package_version == "5:7.0.15-1ubuntu0.24.04.1"
+    assert artifacts[0].artifact_url == "https://archive.ubuntu.com/ubuntu/pool/universe/r/redis/redis-server_7.0.15-1ubuntu0.24.04.1_amd64.deb"
+
+
+def test_parse_deb_packages_index_allows_globs_and_source_package() -> None:
+    data = b"""
+Package: cargo-1.91
+Source: rustc-1.91
+Version: 1.91.1+dfsg~24.04-0ubuntu0.24.04.3
+Architecture: amd64
+Filename: pool/universe/r/rustc-1.91/cargo-1.91_1.91.1+dfsg~24.04-0ubuntu0.24.04.3_amd64.deb
+
+Package: rustc-1.91
+Version: 1.91.1+dfsg~24.04-0ubuntu0.24.04.3
+Architecture: amd64
+Filename: pool/universe/r/rustc-1.91/rustc-1.91_1.91.1+dfsg~24.04-0ubuntu0.24.04.3_amd64.deb
+
+Package: rust-doc
+Source: rustc
+Version: 1.75.0+dfsg0ubuntu1-0ubuntu7.4
+Architecture: all
+Filename: pool/universe/r/rustc/rust-doc_1.75.0+dfsg0ubuntu1-0ubuntu7.4_all.deb
+"""
+    artifacts = parse_deb_packages_index(
+        data=data,
+        base_url="https://archive.ubuntu.com/ubuntu/",
+        source_name="ubuntu-noble-updates",
+        source_url="https://archive.ubuntu.com/ubuntu/dists/noble-updates/universe/binary-amd64/",
+        product="rustc",
+        os_name="ubuntu",
+        os_version="24.04",
+        package_names=["rustc-*", "cargo-*"],
+    )
+    assert [item.package_name for item in artifacts] == ["rustc-1.91", "cargo-1.91"]
+
+
 def test_parse_rpm_html_listing() -> None:
     html = """
     <a href="postgresql17-17.6-1PGDG.rhel9.x86_64.rpm">rpm</a>
@@ -53,22 +100,6 @@ def test_parse_rpm_html_listing() -> None:
     )
     assert len(artifacts) == 2
     assert all(a.package_format == "rpm" for a in artifacts)
-
-
-def test_parse_apk_index() -> None:
-    text = "P:postgresql17\nV:17.6-r0\n\nP:postgresql17-client\nV:17.6-r0\n"
-    tar_gz = _build_apk_index_tar_gz(text)
-    artifacts = parse_apk_index(
-        apkindex_tar_gz=tar_gz,
-        base_url="https://example.org/apk/",
-        source_name="apk-source",
-        source_url="https://example.org",
-        product="postgresql",
-        os_name="alpine",
-        os_version="3.20",
-    )
-    assert len(artifacts) == 2
-    assert all(a.package_format == "apk" for a in artifacts)
 
 
 def test_parse_exe_html_listing() -> None:

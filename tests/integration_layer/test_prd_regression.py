@@ -73,6 +73,83 @@ class FakeScenarioManager:
         )
 
 
+@pytest.mark.asyncio
+async def test_fastapi_ask_local_uses_package_scenario_before_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(fastapi_server.state, "scenario_manager", FakeScenarioManager(calls=calls))
+
+    result = await fastapi_server.ask_local(
+        fastapi_server.QueryRequest(question="postgresql для ubuntu", answer_mode="no_llm")
+    )
+
+    assert result["mode"] == "registry_scrape_local"
+    assert result["answer_mode"] == "no_llm"
+    assert calls == [{"question": "postgresql для ubuntu", "requested_mode": "local", "answer_mode": "no_llm"}]
+
+
+@pytest.mark.asyncio
+async def test_fastapi_start_endpoint_returns_start_message() -> None:
+    result = await fastapi_server.start()
+
+    assert result["mode"] == "start"
+    assert result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_fastapi_ask_default_alias_uses_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(fastapi_server.state, "scenario_manager", FakeScenarioManager(calls=calls))
+
+    result = await fastapi_server.ask_default(
+        fastapi_server.QueryRequest(question="postgresql для ubuntu", answer_mode="no_llm")
+    )
+
+    assert result["mode"] == "registry_scrape_local"
+    assert calls
+
+
+@pytest.mark.asyncio
+async def test_fastapi_known_general_answer_corrects_redis_definition(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fastapi_server.state, "scenario_manager", None)
+
+    result = await fastapi_server.ask_local(
+        fastapi_server.QueryRequest(question="что такое redis", answer_mode="llm")
+    )
+
+    assert result["mode"] == "known_general_local"
+    assert "Redis" in result["answer"]
+    assert "не является языком программирования" in result["answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "чем отличаются язык python от go",
+        "как задать переменную в Go?",
+    ],
+)
+async def test_fastapi_go_questions_are_not_replaced_with_definition(
+    monkeypatch: pytest.MonkeyPatch,
+    question: str,
+) -> None:
+    monkeypatch.setattr(fastapi_server.state, "scenario_manager", None)
+
+    async def fake_llm_answer(received_question: str, search_scope: str) -> str:
+        assert received_question == question
+        assert search_scope == "local"
+        return "LLM answered the actual question"
+
+    monkeypatch.setattr(fastapi_server, "build_llm_general_answer", fake_llm_answer)
+
+    result = await fastapi_server.ask_local(
+        fastapi_server.QueryRequest(question=question, answer_mode="llm")
+    )
+
+    assert result["mode"] == "llm_general_local"
+    assert result["answer"] == "LLM answered the actual question"
+
+
 class ContextOutbox(FakeOutbox):
     def __init__(self, previous: AskExchangeEvent) -> None:
         super().__init__()
@@ -218,7 +295,7 @@ async def test_redis_latest_followup_uses_previous_subject_instead_of_general_ll
     )
 
     result = await orchestrator.handle_user_message(
-        raw_text="дай мне его последнюю версию",
+        raw_text="дай мне его последнюю версию для ubuntu 24",
         chat_id="chat",
         user_id="user",
         correlation_id="new",
@@ -226,7 +303,7 @@ async def test_redis_latest_followup_uses_previous_subject_instead_of_general_ll
 
     assert result.answer_mode == "llm"
     assert calls
-    assert calls[0]["question"] == "product=redis latest version дай мне его последнюю версию"
+    assert calls[0]["question"] == "product=redis latest version дай мне его последнюю версию для ubuntu 24"
     assert api.ask_calls == []
 
 

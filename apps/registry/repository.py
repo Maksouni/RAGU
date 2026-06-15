@@ -23,6 +23,14 @@ class RegistryRepository:
     def list_all(self) -> list[RepositoryTemplate]:
         return list(self._templates)
 
+    @staticmethod
+    def _version_matches(template_version: str | None, requested_version: str) -> bool:
+        template_norm = (template_version or "").strip().lower()
+        requested_norm = requested_version.strip().lower()
+        if template_norm in {requested_norm, "*", ""}:
+            return True
+        return bool(requested_norm and template_norm.startswith(f"{requested_norm}."))
+
     def find_for_os(self, os_name: str, os_version: str) -> list[RepositoryTemplate]:
         os_norm = os_name.strip().lower()
         version_norm = os_version.strip().lower()
@@ -30,7 +38,7 @@ class RegistryRepository:
             t
             for t in self._templates
             if (t.os or "").lower() == os_norm
-            and ((t.os_version or "").lower() in {version_norm, "*", ""})
+            and (not version_norm or self._version_matches(t.os_version, version_norm))
         ]
 
     def filter_templates(
@@ -46,7 +54,7 @@ class RegistryRepository:
             result = [t for t in result if (t.os or "").lower() == os_norm]
         if os_version:
             version_norm = os_version.lower()
-            result = [t for t in result if (t.os_version or "").lower() in {version_norm, "*", ""}]
+            result = [t for t in result if self._version_matches(t.os_version, version_norm)]
         if package_format:
             fmt = package_format.lower()
             result = [t for t in result if t.package_format == fmt]
